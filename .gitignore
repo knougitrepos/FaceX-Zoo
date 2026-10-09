@@ -1,2 +1,17 @@
 # VGGFace2 dataset (HuggingFace clone; large archives)
 VGGFace2/
+
+
+paper/
+
+# Large checkpoints, caches, and training logs
+fine-tune/checkpoints/
+fine-tune/logs/
+fine-tune/data/
+*.pt
+*.pth
+*.tar.gz
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
