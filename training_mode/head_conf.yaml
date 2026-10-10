@@ -70,3 +70,11 @@ ArcNegFace:
     num_class: 72778
     margin: 0.5
     scale: 64
+
+AdaFace:
+    feat_dim: 1024
+    num_class: 8631
+    m: 0.4
+    h: 0.333
+    scale: 64.0
+    t_alpha: 0.01

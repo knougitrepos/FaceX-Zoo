@@ -18,6 +18,7 @@ from head.NPCFace import NPCFace
 from head.SST_Prototype import SST_Prototype
 from head.ArcNegFace import ArcNegFace
 from head.MagFace import MagFace
+from head.AdaFace import AdaFace
 
 class HeadFactory:
     """Factory to produce head according to the head_conf.yaml
@@ -107,6 +108,14 @@ class HeadFactory:
             margin = self.head_param['margin'] # cos(theta + margin).
             scale = self.head_param['scale'] # the scaling factor for cosine values.
             head = ArcNegFace(feat_dim, num_class, margin, scale)
+        elif self.head_type == 'AdaFace':
+            feat_dim = self.head_param['feat_dim'] # dimension of the output features, e.g. 1024 or 512
+            num_class = self.head_param['num_class'] # number of classes in the training set.
+            m = self.head_param.get('m', 0.4)
+            h = self.head_param.get('h', 0.333)
+            scale = self.head_param.get('scale', 64.0)
+            t_alpha = self.head_param.get('t_alpha', 0.01)
+            head = AdaFace(feat_dim, num_class, m, h, scale, t_alpha)
         else:
             pass
         return head

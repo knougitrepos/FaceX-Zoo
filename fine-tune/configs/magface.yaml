@@ -1,0 +1,22 @@
+# ==============================================================================
+# MagFace Baseline 설정 파일 (magface.yaml)
+# 참고 논문:
+# 1. MagFace: A Universal Representation for Face Recognition and Quality Assessment (CVPR 2021, Meng et al.)
+# 2. UCFace (IEEE TIFS 2024, Ahn et al.) IV-A-2 Baseline Models: (la, ua, lm, um, lambda_g)=(10, 110, 0.45, 0.8, 20), s=64.0
+# ==============================================================================
+
+head:
+  type: "MagFace"
+  feat_dim: 1024       # MobileFaceNet 임베딩 차원 (논문 Table I: 1024D)
+  num_class: 8631      # VGGFace2 클래스 수
+  margin_am: 0.0
+  scale: 64.0          # UCFace 논문 IV-A-2 설정
+  l_a: 10.0            # 하한 norm (UCFace: 10.0)
+  u_a: 110.0           # 상한 norm (UCFace: 110.0)
+  l_margin: 0.45       # 하한 마진 (UCFace: 0.45)
+  u_margin: 0.8        # 상한 마진 (UCFace: 0.8)
+  lamda: 20.0          # 규제화 가중치 lambda_g (UCFace: 20.0)
+
+experiment:
+  model_name: "MobileFaceNet_1024D_MagFace"
+  description: "MagFace baseline trained on VGGFace2 with MobileFaceNet (1024D) matching UCFace settings"

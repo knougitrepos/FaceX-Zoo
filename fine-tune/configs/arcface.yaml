@@ -1,0 +1,18 @@
+# ==============================================================================
+# ArcFace Baseline 설정 파일 (arcface.yaml)
+# 참고 논문:
+# 1. ArcFace: Additive Angular Margin Loss for Deep Face Recognition (CVPR 2019, Deng et al.)
+# 2. UCFace (IEEE TIFS 2024, Ahn et al.) IV-A-2 Baseline Models: m=0.6, s=64.0
+# ==============================================================================
+
+head:
+  type: "ArcFace"
+  feat_dim: 1024       # MobileFaceNet 임베딩 차원 (논문 Table I: 1024D)
+  num_class: 8631      # VGGFace2 클래스 수
+  margin_arc: 0.6      # UCFace 논문 IV-A-2 설정 (FaceX-Zoo 기본값 0.35 대신 논문 값 적용)
+  margin_am: 0.0
+  scale: 64.0          # UCFace 논문 IV-A-2 설정 (FaceX-Zoo 기본값 32 대신 논문 값 적용)
+
+experiment:
+  model_name: "MobileFaceNet_1024D_ArcFace"
+  description: "ArcFace baseline trained on VGGFace2 with MobileFaceNet (1024D) matching UCFace settings"

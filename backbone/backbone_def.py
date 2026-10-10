@@ -41,7 +41,8 @@ class BackboneFactory:
             feat_dim = self.backbone_param['feat_dim'] # dimension of the output features, e.g. 512.
             out_h = self.backbone_param['out_h'] # height of the feature map before the final features.
             out_w = self.backbone_param['out_w'] # width of the feature map before the final features.
-            backbone = MobileFaceNet(feat_dim, out_h, out_w)
+            dropout_rate = self.backbone_param.get('dropout_rate', 0.0)
+            backbone = MobileFaceNet(feat_dim, out_h, out_w, dropout_rate)
         elif self.backbone_type == 'ResNet':
             depth = self.backbone_param['depth'] # depth of the ResNet, e.g. 50, 100, 152.
             drop_ratio = self.backbone_param['drop_ratio'] # drop out ratio.

@@ -1,0 +1,69 @@
+# ==============================================================================
+# FaceX-Zoo & UCFace Baseline 공통 설정 파일 (common.yaml)
+#
+# [1] 논문 본문(IEEE TIFS 2024 IV-A) 직접 확인 기준:
+#     - MobileFaceNet 1024D (Table I)
+#     - Adam optimizer (IV-A-3)
+#     - lr = 1e-3, decay 0.1 at [10, 20, 30] epochs (IV-A-3)
+#     - total epochs = 40 (IV-A-3)
+#     - batch size = 64 for softmax classifiers (IV-A-3)
+#     - internal dropout rate = 0.6 (IV-A-3)
+#
+# [2] 본 구현의 세부 공학적 선택 (논문 미언급):
+#     - input_size: 112x112, BGR, (pixel - 127.5) / 128.0 (FaceX-Zoo 표준, 단순 리사이즈)
+#     - dropout 삽입 위치: 최종 선형 출력층 직전
+#     - seed: 8972 재현성 난수 초기화 (goal.md Section 4 명시 기준)
+#     - seed_list: [8972, 8973, 8974, 8975, 8976] (5회 반복 실험 기본 목록)
+#     - keep_raw_results: True (원본 결과 및 세부 산출물 보존 옵션)
+#     - 95% train / 5% val 이미지 분할
+# ==============================================================================
+
+project:
+  name: "FaceX-Zoo-UCFace-Baselines"
+  seed: 8972              # [공학적 선택/goal.md 명시] 재현성 고정 난수 시드 (기본값: 8972)
+  seed_list: [8972, 8973, 8974, 8975, 8976]  # [goal.md Section 4] 5회 반복 실험 기본 시드 목록
+  keep_raw_results: true  # [goal.md Section 10] 원본 결과 및 체크포인트 보존 여부
+  device: "cuda:0"
+
+# Backbone 모델 설정
+backbone:
+  type: "MobileFaceNet"
+  feat_dim: 1024         # [논문 명시] UCFace 논문 본문 Table I 주 실험: 1024D
+  out_h: 7
+  out_w: 7
+  dropout_rate: 0.6      # [논문 명시] UCFace 논문 IV-A-3: "internal dropout rate is 0.6"
+
+# 학습 최적화 및 일정 설정
+training:
+  optimizer: "adam"      # [논문 명시] UCFace 논문 IV-A-3: Adam optimizer
+  lr: 0.001              # [논문 명시] MobileFaceNet 기준 lr = 1e-3
+  weight_decay: 0.0001
+  epoches: 40            # [논문 명시] UCFace 논문 IV-A-3: 40 epochs
+  milestones: [10, 20, 30] # [논문 명시] 10 epoch마다 0.1 decay
+  lr_decay_ratio: 0.1
+  batch_size: 64         # [논문 명시] UCFace 논문 IV-A-3: batch size 64 for softmax classifiers
+  num_workers: 0         # Windows/Jupyter 기본: 단일 프로세스 이미지 로딩
+  print_freq: 20
+  save_freq: 5
+
+# 데이터셋 경로 및 전처리 설정
+dataset:
+  name: "VGGFace2"
+  raw_root: "F:/FaceX-Zoo/VGGFace2"
+  image_root: "F:/FaceX-Zoo/VGGFace2/train" # [데이터 경로 정합성] 압축 해제된 실제 이미지 디렉터리
+  train_archive: "F:/FaceX-Zoo/VGGFace2/data/vggface2_train.tar.gz"
+  test_archive: "F:/FaceX-Zoo/VGGFace2/data/vggface2_test.tar.gz"
+  meta_csv: "F:/FaceX-Zoo/VGGFace2/meta/identity_meta.csv"
+  num_classes: 8631      # VGGFace2 학습 클래스 수 (Flag=1)
+  input_size: [112, 112] # [공학적 선택] 단순 리사이즈
+  pixel_mean: 127.5
+  pixel_std: 128.0       # [공학적 선택] (pixel - 127.5) / 128.0 정규화
+  processed_root: "F:/FaceX-Zoo/fine-tune/data/vggface2_processed"
+  train_list: "F:/FaceX-Zoo/fine-tune/data/train_list.txt"
+  val_list: "F:/FaceX-Zoo/fine-tune/data/val_list.txt"
+
+# 결과 및 체크포인트 디렉터리
+paths:
+  checkpoint_dir: "F:/FaceX-Zoo/fine-tune/checkpoints"
+  log_dir: "F:/FaceX-Zoo/fine-tune/logs"
+  export_dir: "F:/FaceX-Zoo/fine-tune/checkpoints/exported"

@@ -1,0 +1,20 @@
+# ==============================================================================
+# AdaFace Baseline 설정 파일 (adaface.yaml)
+# 참고 논문:
+# 1. AdaFace: Quality Adaptive Margin for Face Recognition (CVPR 2022, Kim et al.)
+# 2. UCFace (IEEE TIFS 2024, Ahn et al.) IV-A-2 Baseline Models: m=0.4, s=64.0, h=0.333
+# 공식 코드: mk-minchul/AdaFace (t_alpha=0.01)
+# ==============================================================================
+
+head:
+  type: "AdaFace"
+  feat_dim: 1024       # MobileFaceNet 임베딩 차원 (논문 Table I: 1024D)
+  num_class: 8631      # VGGFace2 클래스 수
+  m: 0.4               # UCFace 논문 IV-A-2 설정
+  h: 0.333             # UCFace 논문 IV-A-2 설정 (저해상도/품질 적응 집중도 계수)
+  scale: 64.0          # UCFace 논문 IV-A-2 설정
+  t_alpha: 0.01        # AdaFace 공식 예시 EMA 이동평균 업데이트 계수
+
+experiment:
+  model_name: "MobileFaceNet_1024D_AdaFace"
+  description: "AdaFace baseline trained on VGGFace2 with MobileFaceNet (1024D) matching UCFace settings"

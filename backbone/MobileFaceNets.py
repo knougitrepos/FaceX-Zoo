@@ -7,7 +7,7 @@
 # based on:
 # https://github.com/TreB1eN/InsightFace_Pytorch/blob/master/model.py
 
-from torch.nn import Linear, Conv2d, BatchNorm1d, BatchNorm2d, PReLU, Sequential, Module
+from torch.nn import Linear, Conv2d, BatchNorm1d, BatchNorm2d, PReLU, Sequential, Module, Dropout
 import torch
 
 class Flatten(Module):
@@ -66,7 +66,7 @@ class Residual(Module):
         return self.model(x)
 
 class MobileFaceNet(Module):
-    def __init__(self, embedding_size, out_h, out_w):
+    def __init__(self, embedding_size, out_h, out_w, dropout_rate=0.0):
         super(MobileFaceNet, self).__init__()
         self.conv1 = Conv_block(3, 64, kernel=(3, 3), stride=(2, 2), padding=(1, 1))
         self.conv2_dw = Conv_block(64, 64, kernel=(3, 3), stride=(1, 1), padding=(1, 1), groups=64)
@@ -81,6 +81,11 @@ class MobileFaceNet(Module):
         #self.conv_6_dw = Linear_block(512, 512, groups=512, kernel=(4,7), stride=(1, 1), padding=(0, 0))
         self.conv_6_dw = Linear_block(512, 512, groups=512, kernel=(out_h, out_w), stride=(1, 1), padding=(0, 0))
         self.conv_6_flatten = Flatten()
+        self.dropout_rate = dropout_rate
+        if self.dropout_rate > 0.0:
+            self.dropout = Dropout(p=self.dropout_rate)
+        else:
+            self.dropout = None
         self.linear = Linear(512, embedding_size, bias=False)
         self.bn = BatchNorm1d(embedding_size)
     
@@ -96,6 +101,8 @@ class MobileFaceNet(Module):
         out = self.conv_6_sep(out)
         out = self.conv_6_dw(out)
         out = self.conv_6_flatten(out)
+        if self.dropout is not None:
+            out = self.dropout(out)
         out = self.linear(out)
         out = self.bn(out)
         return out
