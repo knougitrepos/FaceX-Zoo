@@ -1,0 +1,169 @@
+{
+  "created": "2026-10-11 00:00 KST",
+  "branch": "add-adaface",
+  "commit": "0d9be3f76a5afbd43e7775d22d0768e3702f54c7",
+  "dirty": true,
+  "benchmarks": [
+    {
+      "source": "F:\\FaceX-Zoo\\fine-tune\\data\\launches\\e19645d9004f4bb28390b21a8b087e3b\\result.json",
+      "sha256": "342ea0761105302925e513871f4abced4ddc0db0958b8db6da75bd30516a99a1",
+      "rows": [
+        {
+          "workers": 0,
+          "steps": 100,
+          "images_per_second": 216.87086142629042,
+          "seconds": 29.510649599993485,
+          "peak_gpu_mb": 2565.12939453125,
+          "dataset": "VGGFace2",
+          "classes": 8631,
+          "dimension": 1024,
+          "batch_size": 64,
+          "is_formal_training": false,
+          "head": "arcface",
+          "scope": "bounded throughput only; no benchmark accuracy"
+        },
+        {
+          "workers": 2,
+          "steps": 100,
+          "images_per_second": 564.3879377280444,
+          "seconds": 11.339717900002142,
+          "peak_gpu_mb": 2566.15673828125,
+          "dataset": "VGGFace2",
+          "classes": 8631,
+          "dimension": 1024,
+          "batch_size": 64,
+          "is_formal_training": false,
+          "head": "arcface",
+          "scope": "bounded throughput only; no benchmark accuracy"
+        },
+        {
+          "workers": 4,
+          "steps": 100,
+          "images_per_second": 563.0046099254184,
+          "seconds": 11.367580100006307,
+          "peak_gpu_mb": 2565.73681640625,
+          "dataset": "VGGFace2",
+          "classes": 8631,
+          "dimension": 1024,
+          "batch_size": 64,
+          "is_formal_training": false,
+          "head": "arcface",
+          "scope": "bounded throughput only; no benchmark accuracy"
+        }
+      ]
+    },
+    {
+      "source": "F:\\FaceX-Zoo\\fine-tune\\data\\launches\\0df2c2ec2ffe41689445f75183d0f862\\result.json",
+      "sha256": "214089607c185145a59acfadf36d5e8199fe9fd9520166a1edbf8e50a3af483e",
+      "rows": [
+        {
+          "workers": 2,
+          "steps": 300,
+          "images_per_second": 472.77532174286745,
+          "seconds": 40.61125679999532,
+          "peak_gpu_mb": 2565.12939453125,
+          "dataset": "VGGFace2",
+          "classes": 8631,
+          "dimension": 1024,
+          "batch_size": 64,
+          "is_formal_training": false,
+          "head": "arcface",
+          "scope": "bounded throughput only; no benchmark accuracy"
+        },
+        {
+          "workers": 0,
+          "steps": 300,
+          "images_per_second": 545.3800762841706,
+          "seconds": 35.204806399997324,
+          "peak_gpu_mb": 2566.15673828125,
+          "dataset": "VGGFace2",
+          "classes": 8631,
+          "dimension": 1024,
+          "batch_size": 64,
+          "is_formal_training": false,
+          "head": "arcface",
+          "scope": "bounded throughput only; no benchmark accuracy"
+        }
+      ]
+    }
+  ],
+  "survface_protocol": {
+    "name": "survface",
+    "raw_root": "C:\\ronbun",
+    "num_classes": 5319,
+    "images": 220888,
+    "train_list": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\survface\\train_list.txt",
+    "train_sha256": "4f5d01cc8a5ffa9c9d331d4a4a6a7000ad0d248e0cef428d2c35fa991bf7f30e",
+    "training_manifest": "C:\\ronbun\\data\\interim\\SurvFace\\training_manifest.csv",
+    "training_manifest_sha256": "db5bb106a5e33ea3ebf7c9dfb06a1330c92aa2638dba8fc298318169e4bd5456",
+    "evaluation_manifest": "C:\\ronbun\\data\\interim\\SurvFace\\official_manifest.csv",
+    "evaluation_manifest_sha256": "a2c68717aaf989cd4cadae03808dde6f1b56d039b488d41258a82372c3f19737",
+    "identity_disjoint": true,
+    "evaluation_identities": 5319,
+    "identity_check_scope": "native IDs verified where available; official distractor identity disjointness relies on dataset protocol",
+    "evaluation_images_without_native_identity": 28476,
+    "all_images_decode": "not_checked",
+    "source": "UCFace Supplement II-A/Table IX",
+    "existing_ronbun_calibration_overlap_images": 44683,
+    "ronbun_calibration_reuse": "requires new protocol review; no automatic reuse with this FR model",
+    "validation": "none; all official training images used, no test-based checkpoint selection"
+  },
+  "scope": "implementation and bounded verification; no formal campaign or FIQA results",
+  "notebooks": [
+    {
+      "notebook": "00_environment_and_data.ipynb",
+      "executed_in_fresh_kernel": true,
+      "formal_training": false
+    },
+    {
+      "notebook": "01_prepare_vggface2.ipynb",
+      "executed_in_fresh_kernel": true,
+      "formal_training": false
+    },
+    {
+      "notebook": "02_pretrain.ipynb",
+      "executed_in_fresh_kernel": true,
+      "formal_training": false
+    },
+    {
+      "notebook": "03_finetune.ipynb",
+      "executed_in_fresh_kernel": true,
+      "formal_training": false
+    },
+    {
+      "notebook": "04_export_and_validate.ipynb",
+      "executed_in_fresh_kernel": true,
+      "formal_training": false
+    }
+  ],
+  "sources": {
+    "paper\\UCFace.pdf": "ad96d1534b8336a5c1d7ae7450e1d7d0e05901de3b230f7f0b6c69106e047173",
+    "paper\\부록.pdf": "1db2267e5367120d257c83abc93626df8beeda586b75b4e6c6dc289c29d80905",
+    "fine-tune\\modules\\archive_preparation.py": "737a03dd6986c3ff8717f393a77259a94b361ca72015d51749c58c6d7db977fc",
+    "fine-tune\\modules\\checkpoint_manager.py": "99a3a92a97154720ccb9087c29d7a3168a25fe9dc14fe881f3e5d0a50402b162",
+    "fine-tune\\modules\\dataset.py": "34c7cb723d6b934fcb61348966208a14806d95cf63fd3548e8fc469c8ee762e1",
+    "fine-tune\\modules\\evaluator.py": "243f4aa95afd7448d6f8841adf53227e3dd370203ac6fbd3227a656ab40ecf9c",
+    "fine-tune\\modules\\finetune_protocol.py": "829556756fa11ca81000cda57abd9a420921757b65f27481c7c7362e3158062a",
+    "fine-tune\\modules\\input_pipeline.py": "1868fd8b3fb3131901888ef7b3baa98fd166c2f2d849e382d7ae4e7f1c2a45bc",
+    "fine-tune\\modules\\model_builder.py": "560eac11de99da155b88408e9bbe2fc1223e07d541da70ed55b7d4ea31008d99",
+    "fine-tune\\modules\\notebook_workflow.py": "6b39eab0795a2fa2a9f55373f7ba34e2af8c87d6f695974d13cc1bbdaf33fa49",
+    "fine-tune\\modules\\process_runner.py": "3002c7d220318974c320cce5be9d73a8926b2b5a470a66719b2ecac3fb153008",
+    "fine-tune\\modules\\summary_reporter.py": "a7793f58df6e02abc9ccee67bed29400c0ecf551373003ef7dc3b3af2d731537",
+    "fine-tune\\modules\\trainer.py": "ec2a7dfffff0e4862d5961683b6a65e02c45f6fd9d1537f03363a37573780e3a",
+    "fine-tune\\modules\\__init__.py": "d4dd433dad22bd9c93f0195b97083b88d64868d6350c2cbffed73b61c3835a68"
+  },
+  "validation": {
+    "full_suite": {
+      "passed": 92,
+      "scope": "targeted training workflow including limited CPU/GPU tests",
+      "seconds": 55.49
+    },
+    "post_guardrail_targeted_suite": {
+      "passed": 20
+    },
+    "fresh_kernel_plans": 5,
+    "git_diff_check": "passed",
+    "formal_campaign": "not_executed",
+    "ronbun_fiqa": "not_executed"
+  }
+}

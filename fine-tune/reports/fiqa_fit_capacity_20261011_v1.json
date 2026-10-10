@@ -1,0 +1,42 @@
+{
+  "status": "proposal_only_not_applied",
+  "seed": 8972,
+  "development_fraction": 0.4,
+  "safety_fraction": 0.3,
+  "native_unknown_identities": 2319,
+  "native_unknown_images": 93260,
+  "anonymous_test_only_images": 28476,
+  "groups": {
+    "fit": {
+      "identities": 623,
+      "images": 21138
+    },
+    "safety": {
+      "identities": 306,
+      "images": 14113
+    },
+    "test_known_unknown": {
+      "identities": 1390,
+      "images": 58009
+    }
+  },
+  "fit_requirements": {
+    "fit_non_mated_minimum_in_current_code": 20,
+    "safety_non_mated_minimum_in_current_code": 20,
+    "expected_tail_images_at_fpir_0_01": {
+      "fit": 211.38,
+      "safety": 141.13
+    }
+  },
+  "gallery": "unchanged official 3000 registered IDs",
+  "calibration_source": "official non-mated evaluation pool; reserve before score inspection and exclude from final FIQA test",
+  "training_split": "unchanged complete official FR training set",
+  "official_evaluation_equivalent": false,
+  "limitations": [
+    "Proposal changes non-mated test denominator; cannot claim exact UCFace evaluation reproduction",
+    "Fit sees known-unknown native IDs; anonymous distractors kept test-only create a possible mixture/domain shift",
+    "Repeated images per identity are correlated; image counts are not independent sample counts",
+    "No quality-bin coverage, embeddings, score fitting, PQ training, thresholds, or formal FPIR guarantee verified",
+    "Current ronbun per-image unknown labels need true-native identity grouping before fit/safety use"
+  ]
+}

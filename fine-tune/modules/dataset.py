@@ -78,23 +78,24 @@ class VGGFace2ArchiveInspector:
             raise
 
 
-def apply_face_augmentation(image: np.ndarray, is_train: bool = True) -> np.ndarray:
+def apply_face_augmentation(image: np.ndarray, is_train: bool = True, rng=None) -> np.ndarray:
     """Apply data augmentation matching UCFace paper settings.
     Baseline margin classifiers use: horizontal flip, affine scaling and rotation.
     Input image shape: [H, W, C] in BGR.
     """
     if not is_train:
         return image
+    rng = rng or random
 
     # Horizontal flip (50% probability)
-    if random.random() > 0.5:
+    if rng.random() > 0.5:
         image = cv2.flip(image, 1)
 
     # Affine transformation: rotation (-10 to 10 deg) and slight scaling (0.95 to 1.05)
-    if random.random() > 0.5:
+    if rng.random() > 0.5:
         h, w = image.shape[:2]
-        angle = random.uniform(-10.0, 10.0)
-        scale = random.uniform(0.95, 1.05)
+        angle = rng.uniform(-10.0, 10.0)
+        scale = rng.uniform(0.95, 1.05)
         center = (w / 2.0, h / 2.0)
         matrix = cv2.getRotationMatrix2D(center, angle, scale)
         image = cv2.warpAffine(image, matrix, (w, h), borderMode=cv2.BORDER_REFLECT)
@@ -148,6 +149,8 @@ class FaceImageDataset(Dataset):
         is_train: bool = True,
         pixel_mean: float = 127.5,
         pixel_std: float = 128.0,
+        cache_dir=None,
+        seed: int = 8972,
     ):
         self.data_root = data_root
         self.index_file = index_file
@@ -157,12 +160,18 @@ class FaceImageDataset(Dataset):
         self.is_train = is_train
         self.pixel_mean = float(pixel_mean)
         self.pixel_std = float(pixel_std)
+        self.seed = int(seed)
+        self.mapped = cache_dir is not None
         if not np.isfinite(self.pixel_mean) or not np.isfinite(self.pixel_std) or self.pixel_std <= 0:
             raise ValueError("pixel_mean/std must be finite, with pixel_std > 0")
         self.samples: List[Tuple[str, int]] = []
 
         if not os.path.exists(index_file):
             logger.warning(f"Index file {index_file} does not exist. Initializing empty dataset.")
+            return
+        if self.mapped:
+            from .input_pipeline import prepare_mapped_index
+            self.samples = prepare_mapped_index(data_root, index_file, cache_dir)
             return
 
         try:
@@ -183,10 +192,13 @@ class FaceImageDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, int]:
+        epoch = 1
+        if isinstance(index, tuple):
+            index, epoch = index
         rel_path, label = self.samples[index]
-        full_path = resolve_image_path(self.data_root, rel_path)
+        full_path = rel_path if self.mapped else resolve_image_path(self.data_root, rel_path)
         
-        if not os.path.exists(full_path):
+        if not self.mapped and not os.path.exists(full_path):
             logger.error(f"Image file does not exist: {full_path}")
             raise FileNotFoundError(f"Image file does not exist: {full_path}")
 
@@ -201,7 +213,8 @@ class FaceImageDataset(Dataset):
 
         # Apply augmentation for training
         if self.is_train:
-            image = apply_face_augmentation(image, is_train=True)
+            rng = random.Random((self.seed << 40) ^ (int(epoch) << 32) ^ int(index))
+            image = apply_face_augmentation(image, is_train=True, rng=rng)
 
         # Handle grayscale (2D) images if encountered
         if image.ndim == 2:
@@ -248,6 +261,10 @@ def build_dataloader(
     target_size: Tuple[int, int] = (112, 112),
     pixel_mean: float = 127.5,
     pixel_std: float = 128.0,
+    cache_dir=None,
+    seed: int = 8972,
+    prefetch_factor: int = 2,
+    persistent_workers: bool = True,
 ) -> DataLoader:
     """Build a PyTorch DataLoader for face training or evaluation."""
     dataset = FaceImageDataset(
@@ -257,14 +274,21 @@ def build_dataloader(
         target_size=target_size,
         pixel_mean=pixel_mean,
         pixel_std=pixel_std,
+        cache_dir=cache_dir, seed=seed,
     )
+    from .input_pipeline import EpochBatchSampler, initialize_worker
+    sampler = EpochBatchSampler(len(dataset), batch_size, seed, shuffle=is_train, drop_last=is_train)
+    kwargs = {}
+    if num_workers > 0:
+        kwargs.update(prefetch_factor=prefetch_factor, persistent_workers=persistent_workers,
+                      multiprocessing_context="spawn", worker_init_fn=initialize_worker)
     return DataLoader(
         dataset,
-        batch_size=batch_size,
-        shuffle=is_train,
+        batch_sampler=sampler,
         num_workers=num_workers,
         pin_memory=pin_memory and torch.cuda.is_available(),
-        drop_last=is_train,
+        generator=torch.Generator().manual_seed(seed),
+        **kwargs,
     )
 
 

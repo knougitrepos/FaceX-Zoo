@@ -17,7 +17,9 @@ from modules.checkpoint_manager import load_checkpoint
 
 
 @pytest.fixture
-def cfg(tmp_path):
+def cfg(tmp_path, monkeypatch):
+    from modules import finetune_protocol as protocol
+    monkeypatch.setitem(protocol.PAPER_SPLITS, "tinyface", (2, 8))
     root = tmp_path / "data"
     (root / "meta").mkdir(parents=True)
     (root / "data").mkdir()
@@ -39,10 +41,26 @@ def cfg(tmp_path):
                     "pixel_mean": 0.0, "pixel_std": 255.0},
         "backbone": {"feat_dim": 8},
         "training": {"epoches": 1, "batch_size": 2, "num_workers": 0},
+        "campaign": {"pretrain_epochs": 1, "finetune_datasets": ["tinyface"]},
         "paths": {"checkpoint_dir": str(tmp_path / "checkpoints"), "export_dir": str(tmp_path / "exports"),
-                  "report_dir": str(tmp_path / "reports")},
+                  "report_dir": str(tmp_path / "reports"), "cache_dir": str(tmp_path / "cache")},
     })
     flow.prepare_indices(result, val_every=2)
+    import csv
+    train_csv, eval_csv = tmp_path / "train.csv", tmp_path / "test.csv"
+    fields = ["image_path", "source_identity_id", "protocol_role", "split"]
+    with train_csv.open("w", newline="") as file:
+        writer = csv.DictWriter(file, fields); writer.writeheader()
+        for path in lines:
+            writer.writerow(dict(image_path=path, source_identity_id=path.split("/")[0], protocol_role="training", split="training"))
+    with eval_csv.open("w", newline="") as file:
+        writer = csv.DictWriter(file, fields); writer.writeheader()
+        writer.writerow(dict(image_path="eval/c/1.png", source_identity_id="c", protocol_role="gallery", split="test"))
+    result["finetune_profiles"]["tinyface"].update(raw_root=str(root), num_classes=2, expected_images=8,
+        local_audit_required=False,
+        train_list=str(tmp_path / "fine_train.txt"), val_list=None,
+        protocol_record=str(tmp_path / "protocol.json"), training_manifest=str(train_csv), evaluation_manifest=str(eval_csv))
+    protocol.prepare_protocol(result["finetune_profiles"]["tinyface"])
     return result
 
 
@@ -71,15 +89,17 @@ def test_preprocessing_and_workers_reach_train_and_val(cfg):
 
 def test_unsupported_notebook_input_and_workers_fail_explicitly(cfg):
     for workers in (1, 2, 4):
+        flow.validate_settings(flow.merge_settings(cfg, {"training": {"num_workers": workers}}))
+    for workers in (-1, 13):
         altered = flow.merge_settings(cfg, {"training": {"num_workers": workers}})
-        with pytest.raises(ValueError, match="NUM_WORKERS=0"):
+        with pytest.raises(ValueError, match="NUM_WORKERS"):
             flow.validate_settings(altered)
     with pytest.raises(ValueError, match="INPUT_SIZE"):
         flow.validate_settings(flow.merge_settings(cfg, {"dataset": {"input_size": [96, 96]}}))
 
 
 def test_seed_head_matrix_and_unchanged_lists(cfg):
-    assert len(flow.plan_matrix(cfg, "pretrain")) == 2
+    assert len(flow.plan_matrix(cfg, "pretrain")) == 1
     plan = flow.plan_matrix(cfg, "finetune")
     assert [(r["seed"], r["head"]) for r in plan] == [
         (seed, head) for seed in (8972, 8973) for head in flow.HEAD_NAMES]
@@ -103,13 +123,16 @@ def test_environment_never_claims_unchecked_integrity(cfg):
 def test_real_small_image_matrix_and_export(cfg, monkeypatch):
     # CPU only for this bounded test; production formal path still requires CUDA.
     monkeypatch.setattr(flow, "_formal_device", lambda config: torch.device("cpu"))
+    monkeypatch.setattr(flow, "validate_paper_parameters", lambda config: None)  # tiny diagnostic architecture only
     old_threads = torch.get_num_threads()
     torch.set_num_threads(1)
     try:
         parents = flow.run_training_matrix(cfg, "pretrain")
-        assert len(parents) == 2 and all(r["completed"] for r in parents)
+        assert len(parents) == 1 and all(r["completed"] for r in parents)
         runs = flow.run_training_matrix(cfg, "finetune")
         assert len(runs) == 6 and all(r["completed"] for r in runs)
+        assert len({load_checkpoint(r["checkpoint"])["parent_hash"] for r in runs}) == 1
+        assert len({load_checkpoint(r["checkpoint"])["seed"] for r in runs}) == 2
         for row in runs:
             checkpoint = load_checkpoint(row["checkpoint"])
             assert checkpoint["config"]["preprocessing"]["pixel_std"] == 255
@@ -146,7 +169,7 @@ def test_interrupted_resume_allows_subset_and_retention_override(cfg, monkeypatc
     from modules.trainer import Trainer
     monkeypatch.setattr(flow, "_formal_device", lambda config: torch.device("cpu"))
     original = Trainer.train_one_epoch
-    cfg = flow.merge_settings(cfg, {"training": {"epoches": 2, "save_freq": 1},
+    cfg = flow.merge_settings(cfg, {"training": {"epoches": 2, "save_freq": 1}, "campaign": {"pretrain_epochs": 2},
                                      "project": {"keep_raw_results": True}})
     def interrupted(self, epoch):
         if epoch == 2:

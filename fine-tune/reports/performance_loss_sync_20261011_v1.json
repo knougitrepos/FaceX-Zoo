@@ -1,0 +1,416 @@
+{
+  "created_kst": "2026-10-11T03:30:17.295879+09:00",
+  "head": "e81a154d76228ac2c462b22e94c06002f6563052",
+  "dirty": true,
+  "recommended": {
+    "num_workers": 4,
+    "prefetch_factor": 4,
+    "torch_threads": 2,
+    "loss_sync_batches": 20
+  },
+  "trials": {
+    "20261011_031519": {
+      "rows": [
+        {
+          "variant": {
+            "num_workers": 2,
+            "prefetch_factor": 2,
+            "torch_threads": 2,
+            "loss_sync_batches": 1
+          },
+          "measured_steps": 200,
+          "warmup": 50,
+          "images_per_second": 316.70343473953784,
+          "elapsed_seconds": 40.416359900002135,
+          "host_loader_wait_seconds": 16.00674430000072,
+          "peak_gpu_mb": 2566.07470703125,
+          "telemetry": {
+            "gpu": 52.88461538461539,
+            "vram_mb": 4459.948717948718,
+            "power_w": 156.46397435897435,
+            "temperature": 60.01282051282051,
+            "cpu": 42.29871794871795,
+            "ram_gb": 35.62844432928623
+          },
+          "completed": true,
+          "formal_training": false
+        },
+        {
+          "variant": {
+            "num_workers": 2,
+            "prefetch_factor": 2,
+            "torch_threads": 2,
+            "loss_sync_batches": 20
+          },
+          "measured_steps": 200,
+          "warmup": 50,
+          "images_per_second": 546.6553749303966,
+          "elapsed_seconds": 23.415117800002918,
+          "host_loader_wait_seconds": 0.05141240004741121,
+          "peak_gpu_mb": 2566.083984375,
+          "telemetry": {
+            "gpu": 94.93333333333334,
+            "vram_mb": 4442.822222222222,
+            "power_w": 205.05244444444443,
+            "temperature": 66.62222222222222,
+            "cpu": 25.006666666666668,
+            "ram_gb": 35.783698866102434
+          },
+          "completed": true,
+          "formal_training": false
+        },
+        {
+          "variant": {
+            "num_workers": 4,
+            "prefetch_factor": 4,
+            "torch_threads": 2,
+            "loss_sync_batches": 20
+          },
+          "measured_steps": 200,
+          "warmup": 50,
+          "images_per_second": 541.0996463747059,
+          "elapsed_seconds": 23.655531999989762,
+          "host_loader_wait_seconds": 0.05100990002392791,
+          "peak_gpu_mb": 2566.083984375,
+          "telemetry": {
+            "gpu": 94.71739130434783,
+            "vram_mb": 4431.652173913043,
+            "power_w": 203.5758695652174,
+            "temperature": 68.93478260869566,
+            "cpu": 26.66304347826087,
+            "ram_gb": 36.269827303679094
+          },
+          "completed": true,
+          "formal_training": false
+        },
+        {
+          "variant": {
+            "num_workers": 6,
+            "prefetch_factor": 4,
+            "torch_threads": 2,
+            "loss_sync_batches": 20
+          },
+          "measured_steps": 200,
+          "warmup": 50,
+          "images_per_second": 541.0008184622279,
+          "elapsed_seconds": 23.659853300006944,
+          "host_loader_wait_seconds": 0.05310300005658064,
+          "peak_gpu_mb": 2566.083984375,
+          "telemetry": {
+            "gpu": 95.02222222222223,
+            "vram_mb": 4469.711111111111,
+            "power_w": 207.81822222222223,
+            "temperature": 70.02222222222223,
+            "cpu": 30.784444444444443,
+            "ram_gb": 35.86597679985894
+          },
+          "completed": true,
+          "formal_training": false
+        },
+        {
+          "variant": {
+            "num_workers": 8,
+            "prefetch_factor": 4,
+            "torch_threads": 2,
+            "loss_sync_batches": 20
+          },
+          "measured_steps": 200,
+          "warmup": 50,
+          "images_per_second": 548.4423604968918,
+          "elapsed_seconds": 23.3388244999951,
+          "host_loader_wait_seconds": 0.061466000057407655,
+          "peak_gpu_mb": 2566.083984375,
+          "telemetry": {
+            "gpu": 94.36363636363636,
+            "vram_mb": 4590.636363636364,
+            "power_w": 206.58636363636364,
+            "temperature": 70.81818181818181,
+            "cpu": 45.54090909090909,
+            "ram_gb": 37.03360098058527
+          },
+          "completed": true,
+          "formal_training": false
+        }
+      ],
+      "request": "fine-tune\\data\\performance_requests\\20261011_031519.json",
+      "request_sha256": "23241b9bb08f32bf8a25d0a510f95c2d64f08a150c6d2ac62f4377b66140eea9",
+      "resume_sha256": "bfa09a2f877d5c58d1c74616c40d66f324d60afd3ebe9aba7adec55c34e32560",
+      "device": "NVIDIA GeForce GTX 1080 Ti",
+      "is_formal_training": false,
+      "scope": "actual Trainer, same recovery state and next samples; short warm-cache trials, not full epoch ETA"
+    },
+    "20261011_confirm": {
+      "rows": [
+        {
+          "variant": {
+            "num_workers": 2,
+            "prefetch_factor": 2,
+            "torch_threads": 2,
+            "loss_sync_batches": 1
+          },
+          "measured_steps": 400,
+          "warmup": 50,
+          "images_per_second": 412.5828951157364,
+          "elapsed_seconds": 62.04813700000523,
+          "host_loader_wait_seconds": 13.675437299956684,
+          "peak_gpu_mb": 2566.07470703125,
+          "telemetry": {
+            "gpu": 71.03361344537815,
+            "vram_mb": 4589.285714285715,
+            "power_w": 174.97941176470587,
+            "temperature": 66.95798319327731,
+            "cpu": 37.20504201680672,
+            "ram_gb": 35.39283076053908
+          },
+          "weights_sha256": "aec7f97c613a015b681ea63041d3f435c4b0b261625cbcc25b6054b0296c891e",
+          "cumulative_loss_sum": 8116499.426696777,
+          "cumulative_loss_count": 227328,
+          "config_hash": "afd7c15bad446467a3019df678275ac62135215b462bbc328473cbea3ad175cf",
+          "completed": true,
+          "formal_training": false
+        },
+        {
+          "variant": {
+            "num_workers": 2,
+            "prefetch_factor": 2,
+            "torch_threads": 2,
+            "loss_sync_batches": 20
+          },
+          "measured_steps": 400,
+          "warmup": 50,
+          "images_per_second": 542.4472425982614,
+          "elapsed_seconds": 47.19352960000106,
+          "host_loader_wait_seconds": 0.1158277001377428,
+          "peak_gpu_mb": 2600.083984375,
+          "telemetry": {
+            "gpu": 94.23333333333333,
+            "vram_mb": 4602.822222222222,
+            "power_w": 205.45733333333334,
+            "temperature": 70.91111111111111,
+            "cpu": 42.647777777777776,
+            "ram_gb": 35.47785152859158
+          },
+          "weights_sha256": "aec7f97c613a015b681ea63041d3f435c4b0b261625cbcc25b6054b0296c891e",
+          "cumulative_loss_sum": 8116499.426696777,
+          "cumulative_loss_count": 227328,
+          "config_hash": "afd7c15bad446467a3019df678275ac62135215b462bbc328473cbea3ad175cf",
+          "completed": true,
+          "formal_training": false
+        },
+        {
+          "variant": {
+            "num_workers": 8,
+            "prefetch_factor": 4,
+            "torch_threads": 2,
+            "loss_sync_batches": 20
+          },
+          "measured_steps": 400,
+          "warmup": 50,
+          "images_per_second": 546.9782014059709,
+          "elapsed_seconds": 46.80259639999713,
+          "host_loader_wait_seconds": 0.10956449987133965,
+          "peak_gpu_mb": 2600.083984375,
+          "telemetry": {
+            "gpu": 94.5111111111111,
+            "vram_mb": 4785.966666666666,
+            "power_w": 206.9171111111111,
+            "temperature": 72.1,
+            "cpu": 33.20444444444445,
+            "ram_gb": 37.38609479268392
+          },
+          "weights_sha256": "aec7f97c613a015b681ea63041d3f435c4b0b261625cbcc25b6054b0296c891e",
+          "cumulative_loss_sum": 8116499.426696777,
+          "cumulative_loss_count": 227328,
+          "config_hash": "afd7c15bad446467a3019df678275ac62135215b462bbc328473cbea3ad175cf",
+          "completed": true,
+          "formal_training": false
+        }
+      ],
+      "request": "fine-tune\\data\\performance_requests\\20261011_confirm.json",
+      "request_sha256": "755a66ab0403ff2071a1b580727140914020fbcf0f976aa9fbc5a92beea1bb3d",
+      "resume_sha256": "bfa09a2f877d5c58d1c74616c40d66f324d60afd3ebe9aba7adec55c34e32560",
+      "device": "NVIDIA GeForce GTX 1080 Ti",
+      "is_formal_training": false,
+      "scope": "actual Trainer, same recovery state and next samples; short warm-cache trials, not full epoch ETA"
+    },
+    "20261011_fresh_windows": {
+      "rows": [
+        {
+          "variant": {
+            "num_workers": 2,
+            "prefetch_factor": 4,
+            "torch_threads": 2,
+            "loss_sync_batches": 20,
+            "profile_start_batch": 10000
+          },
+          "measured_steps": 250,
+          "warmup": 30,
+          "images_per_second": 319.46764040188145,
+          "elapsed_seconds": 50.083319800003665,
+          "host_loader_wait_seconds": 35.27038180001546,
+          "peak_gpu_mb": 2566.083984375,
+          "telemetry": {
+            "gpu": 57.69072164948454,
+            "vram_mb": 4722.278350515464,
+            "power_w": 148.02494845360826,
+            "temperature": 65.23711340206185,
+            "cpu": 40.088659793814436,
+            "ram_gb": 35.95104154606455
+          },
+          "weights_sha256": "a74fa6a4a90ef62079bf1421bda768fd5c40fac6cdb8945d874245b9ce838dd2",
+          "cumulative_loss_sum": 193903.93035888672,
+          "cumulative_loss_count": 17920,
+          "config_hash": "afd7c15bad446467a3019df678275ac62135215b462bbc328473cbea3ad175cf",
+          "completed": true,
+          "formal_training": false,
+          "start_batch": 10000
+        },
+        {
+          "variant": {
+            "num_workers": 4,
+            "prefetch_factor": 4,
+            "torch_threads": 2,
+            "loss_sync_batches": 20,
+            "profile_start_batch": 20000
+          },
+          "measured_steps": 250,
+          "warmup": 30,
+          "images_per_second": 548.9168315077603,
+          "elapsed_seconds": 29.1483137000032,
+          "host_loader_wait_seconds": 0.08266600019123871,
+          "peak_gpu_mb": 2600.083984375,
+          "telemetry": {
+            "gpu": 94.01818181818182,
+            "vram_mb": 4706.945454545455,
+            "power_w": 203.63145454545455,
+            "temperature": 69.63636363636364,
+            "cpu": 54.339999999999996,
+            "ram_gb": 36.61390228271485
+          },
+          "weights_sha256": "71bfec6038181f399f3923284fd9886208cc91ffeda21f0ee9098aaef80f8d9b",
+          "cumulative_loss_sum": 197328.48876953125,
+          "cumulative_loss_count": 17920,
+          "config_hash": "afd7c15bad446467a3019df678275ac62135215b462bbc328473cbea3ad175cf",
+          "completed": true,
+          "formal_training": false,
+          "start_batch": 20000
+        },
+        {
+          "variant": {
+            "num_workers": 8,
+            "prefetch_factor": 4,
+            "torch_threads": 2,
+            "loss_sync_batches": 20,
+            "profile_start_batch": 30000
+          },
+          "measured_steps": 250,
+          "warmup": 30,
+          "images_per_second": 534.4658754311765,
+          "elapsed_seconds": 29.936429499997757,
+          "host_loader_wait_seconds": 0.08385959998122416,
+          "peak_gpu_mb": 2600.083984375,
+          "telemetry": {
+            "gpu": 93.84210526315789,
+            "vram_mb": 4608.561403508772,
+            "power_w": 205.44122807017544,
+            "temperature": 71.10526315789474,
+            "cpu": 56.76315789473684,
+            "ram_gb": 37.85830032616331
+          },
+          "weights_sha256": "e16540de6bf7ba5396e8f05d8465acdf24a1ab2a701cebefceb1d5b4eb5198ae",
+          "cumulative_loss_sum": 195071.74353027344,
+          "cumulative_loss_count": 17920,
+          "config_hash": "afd7c15bad446467a3019df678275ac62135215b462bbc328473cbea3ad175cf",
+          "completed": true,
+          "formal_training": false,
+          "start_batch": 30000
+        }
+      ],
+      "request": "fine-tune\\data\\performance_requests\\20261011_fresh_windows.json",
+      "request_sha256": "77fe627a735aa94279b79de889b7ece63e0d47a4307fed5c069d3962267373d8",
+      "resume_sha256": "bfa09a2f877d5c58d1c74616c40d66f324d60afd3ebe9aba7adec55c34e32560",
+      "device": "NVIDIA GeForce GTX 1080 Ti",
+      "is_formal_training": false,
+      "scope": "actual Trainer and recovery weights; optional diagnostic sample windows; short trials, not full epoch ETA"
+    },
+    "20261011_worker4_confirm": {
+      "rows": [
+        {
+          "variant": {
+            "num_workers": 4,
+            "prefetch_factor": 4,
+            "torch_threads": 2,
+            "loss_sync_batches": 20
+          },
+          "measured_steps": 400,
+          "warmup": 50,
+          "images_per_second": 532.8179207979168,
+          "elapsed_seconds": 48.046432000002824,
+          "host_loader_wait_seconds": 0.10449279991735239,
+          "peak_gpu_mb": 2566.083984375,
+          "telemetry": {
+            "gpu": 94.26086956521739,
+            "vram_mb": 4583.413043478261,
+            "power_w": 209.60293478260868,
+            "temperature": 70.73913043478261,
+            "cpu": 27.73695652173913,
+            "ram_gb": 36.85425094936205
+          },
+          "weights_sha256": "aec7f97c613a015b681ea63041d3f435c4b0b261625cbcc25b6054b0296c891e",
+          "cumulative_loss_sum": 8116499.426696777,
+          "cumulative_loss_count": 227328,
+          "config_hash": "afd7c15bad446467a3019df678275ac62135215b462bbc328473cbea3ad175cf",
+          "completed": true,
+          "formal_training": false,
+          "start_batch": 3102
+        }
+      ],
+      "request": "fine-tune\\data\\performance_requests\\20261011_worker4_confirm.json",
+      "request_sha256": "c5a0dbfcf2ec6c331dacfd54871f5e4327fb95edcdb17b36b11b93405ef2adb1",
+      "resume_sha256": "bfa09a2f877d5c58d1c74616c40d66f324d60afd3ebe9aba7adec55c34e32560",
+      "device": "NVIDIA GeForce GTX 1080 Ti",
+      "is_formal_training": false,
+      "scope": "actual Trainer and recovery weights; optional diagnostic sample windows; short trials, not full epoch ETA"
+    }
+  },
+  "code_hashes": {
+    "modules/trainer.py": "5019f23500f3cce9ccfcb3e4ca10ab7804c8d50e50f26bf90017f8d55dcf08ea",
+    "modules/notebook_workflow.py": "e33f0cad71fb8ded24f08f0e9fcd9d69826c120d430936808e85ad5bea8d4458",
+    "scripts/profile_training.py": "36cab281962ba56f942b4b0689dbc29025992ec51487eca583787e8d79518368",
+    "tests/test_deferred_loss.py": "0d6ce3f1c21cf6b145137d0b79a65258042013c6951412cb6c86712c81edb37e",
+    "notebooks/00_environment_and_data.ipynb": "8ffaa044e9846ca44ceb5a13e0ab7508f69799e0a4186f78fa404d3b98efad7b",
+    "notebooks/02_pretrain.ipynb": "5d66da5ceba673127cf9ebd227409bcd1432a9c3be8d3583d5fa8a62acd05275",
+    "notebooks/03_finetune.ipynb": "833b326f331fe9a5fae3520bc78be2dbdcf7e49359042b940098a5a3b4c01ffe",
+    "notebooks/04_export_and_validate.ipynb": "2dfef81d3efe999bdfb700b35a37abe41a7c70e49a0f846206bfef2aadee97b6"
+  },
+  "verification": {
+    "cpu_tests_passed": 104,
+    "fresh_kernel_planned_notebooks": 5,
+    "same_cuda_weights_and_loss": true,
+    "original_recovery_unchanged": true,
+    "training_resume_batch": 3102,
+    "formal_training_restarted": false
+  },
+  "resume_checkpoint": "F:\\FaceX-Zoo\\fine-tune\\checkpoints\\shared_parent_v2\\pretrain_arcface_seed8972\\pretrain_mobilefacenet_1024d_recovery_e1_b3102_196a5044.pt",
+  "resume_sha256": "bfa09a2f877d5c58d1c74616c40d66f324d60afd3ebe9aba7adec55c34e32560",
+  "science_unchanged": [
+    "optimizer",
+    "learning_rate",
+    "batch_size",
+    "epochs",
+    "heads",
+    "backbone",
+    "dropout",
+    "input_pixels",
+    "augmentation_rng",
+    "identity_splits",
+    "sample_order"
+  ],
+  "caveats": [
+    "Short trials; full epoch speed and GPU utilization not established",
+    "Fresh windows use different samples; not a paired speed causality test",
+    "Windows filesystem cache not cleared or measured independently",
+    "Warm same-window weights/loss agree exactly on this installed CUDA setup; not a universal proof"
+  ],
+  "interpretation": "fine-tune/reports/performance_loss_sync_20261011_v1.md"
+}

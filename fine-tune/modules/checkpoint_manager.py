@@ -391,7 +391,7 @@ def extract_train_config(
     if curr_vds is not None and hasattr(curr_vds, "index_file") and curr_vds.index_file:
         val_list = str(curr_vds.index_file)
     elif ds_cfg:
-        val_list = str(ds_cfg.get("val_list", ""))
+        val_list = str(ds_cfg.get("val_list") or "")
 
     # Resolve paths if relative to eff_data_root
     resolved_train_list = train_list
@@ -455,6 +455,7 @@ def extract_train_config(
             pixel_std = 128.0
 
         train_part["preprocessing"] = {
+            "sampling": "epoch_index_rng_v1",
             "input_size": input_size if input_size is not None else [112, 112],
             "pixel_mean": pixel_mean if pixel_mean is not None else 127.5,
             "pixel_std": pixel_std if pixel_std is not None else 128.0,
@@ -660,10 +661,10 @@ def compare_configs(
     ckpt_pre = ckpt_cfg.get("preprocessing", {})
     curr_pre = current_cfg.get("preprocessing", {})
     if full_strict and (ckpt_pre or curr_pre):
-        for key in ["input_size", "pixel_mean", "pixel_std"]:
+        for key in ["input_size", "pixel_mean", "pixel_std", "sampling"]:
             _diff_val(f"Preprocessing {key}", ckpt_pre.get(key), curr_pre.get(key))
     else:
-        for key in ["input_size", "pixel_mean", "pixel_std"]:
+        for key in ["input_size", "pixel_mean", "pixel_std", "sampling"]:
             if key in ckpt_pre and key in curr_pre:
                 _diff_val(f"Preprocessing {key}", ckpt_pre[key], curr_pre[key])
 

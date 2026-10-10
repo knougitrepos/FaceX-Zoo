@@ -1,0 +1,276 @@
+{
+  "created_kst": "2026-10-11T01:20:39.438452+09:00",
+  "branch": "add-adaface",
+  "head": "0d9be3f76a5afbd43e7775d22d0768e3702f54c7",
+  "dirty": true,
+  "source_hashes": {
+    "modules/local_datasets.py": "327d51f9c3c1ee85531d9bae7ac4a3658de2abe2115cdda167106397afc0e573",
+    "modules/finetune_protocol.py": "ab4b7e2670c4efca85ffd297b49564fd2b08032dd4116aaba5174313ae814a8d",
+    "modules/fiqa_data_assessment.py": "d62585eefadcb7a77a11a534b41d7a9be7b5ef3f7a2ded5149faf2ed25cd66ec",
+    "modules/notebook_workflow.py": "c372d5c6077f6f0f59e1a2d96f8e50b27f04f771076ef5005884986b3ebb108c",
+    "scripts/run_campaign.py": "3d4a6d30fd5672a81e7cd366485d34ef6b74694884a7e8a91614151606ca11b4",
+    "notebooks/00_environment_and_data.ipynb": "44701e6d35bc58e3ae0b998e7c45348bd9ef0372dc4699018cd34039c71e2d75",
+    "notebooks/03_finetune.ipynb": "9342f3f8769b3927de7518736e7e0b497bebb9e716c6550f1eca22ac0f198792",
+    "notebooks/04_export_and_validate.ipynb": "fdac76c4adbe57ddc2b736ea925be91af2a16b0caab307d4ff615f7b865772b2"
+  },
+  "status": "local_inputs_verified_and_training_connection_implemented",
+  "datasets": {
+    "tinyface": {
+      "audit": {
+        "name": "tinyface",
+        "raw_root": "F:\\FaceX-Zoo\\tinyface",
+        "completed": true,
+        "all_images_decode": true,
+        "image_sha256_computed": true,
+        "source_snapshot": "e944ad00a33d96726941bb7d135b8d0989aac3f5152bec2adc6563e22bb4125c",
+        "groups": {
+          "training": {
+            "images": 7804,
+            "height_min": 15,
+            "height_max": 32,
+            "width_min": 13,
+            "width_max": 32
+          },
+          "gallery": {
+            "images": 4443,
+            "height_min": 15,
+            "height_max": 32,
+            "width_min": 12,
+            "width_max": 32
+          },
+          "registered_probe": {
+            "images": 3728,
+            "height_min": 14,
+            "height_max": 32,
+            "width_min": 12,
+            "width_max": 32
+          },
+          "gallery_distractor": {
+            "images": 153428,
+            "height_min": 2,
+            "height_max": 145,
+            "width_min": 2,
+            "width_max": 119
+          }
+        },
+        "training_identities": 2570,
+        "registered_gallery_identities": 2569,
+        "registered_probe_identities": 2563,
+        "protocol_metadata_sha256": {
+          "Testing_Set\\gallery_match_img_ID_pairs.mat": "7a333180a1f7a1057f16fe1eb31bf21016cb3120aefae491b2d74ef2cfd87182",
+          "Face_Identification_Evaluation\\gallery_match_img_ID_pairs.mat": "7a333180a1f7a1057f16fe1eb31bf21016cb3120aefae491b2d74ef2cfd87182",
+          "Testing_Set\\probe_img_ID_pairs.mat": "31b0c387517274b949d87ccdc6ec44b5c9181a1b900cb313876453f5081a019d",
+          "Face_Identification_Evaluation\\probe_img_ID_pairs.mat": "31b0c387517274b949d87ccdc6ec44b5c9181a1b900cb313876453f5081a019d",
+          "readme.txt": "fa4ea185ea5539b0ce12c81cd87c775943f37687f3da76aaa43a55b90336552e",
+          "Face_Identification_Evaluation/test_face_identification.m": "14ad43fc52ff9121eabe139e174fec6ddd9efa6019e1b92a4e2e6da8891c0b85"
+        },
+        "notes": [
+          "Official README/Table IX claim 2569 probe IDs; supplied complete MAT has 2563 unique probe IDs, 3728 images. Preserve MAT instead of inventing missing probes."
+        ],
+        "release_identity": "local MAT/count/decode verified; byte identity to author archive unconfirmed",
+        "image_hashes": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\tinyface\\image_hashes.csv",
+        "image_hashes_sha256": "4a5411459af8ab155e3deaf124b297a6647b75f664a427ee4c24c119c660df71",
+        "training_manifest": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\tinyface\\training_manifest.csv",
+        "training_manifest_sha256": "307d009a75d31f056ee9cd2ccb360f54da5a53f9339bf93faf511e504a12b4c3",
+        "evaluation_manifest": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\tinyface\\evaluation_manifest.csv",
+        "evaluation_manifest_sha256": "58e7f4de90266b19bc9e53532883ce4d79da6e9cdf7c6f200fcbb2ba6a9ffa98"
+      },
+      "protocol": {
+        "name": "tinyface",
+        "raw_root": "F:\\FaceX-Zoo\\tinyface",
+        "num_classes": 2570,
+        "images": 7804,
+        "train_list": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\tinyface\\train_list.txt",
+        "train_sha256": "fdd3c1d2a8c3d386cafacc9b3a78e7ce23896542fbf900ae750cf0ea48f48756",
+        "training_manifest": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\tinyface\\training_manifest.csv",
+        "training_manifest_sha256": "307d009a75d31f056ee9cd2ccb360f54da5a53f9339bf93faf511e504a12b4c3",
+        "evaluation_manifest": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\tinyface\\evaluation_manifest.csv",
+        "evaluation_manifest_sha256": "58e7f4de90266b19bc9e53532883ce4d79da6e9cdf7c6f200fcbb2ba6a9ffa98",
+        "identity_disjoint": true,
+        "evaluation_identities": 2569,
+        "identity_check_scope": "native IDs verified where available; official distractor identity disjointness relies on dataset protocol",
+        "evaluation_images_without_native_identity": 153428,
+        "all_images_decode": true,
+        "source": "UCFace Supplement II-A/Table IX",
+        "existing_ronbun_calibration_overlap_images": 0,
+        "ronbun_calibration_reuse": "requires new protocol review; no automatic reuse with this FR model",
+        "validation": "none; all official training images used, no test-based checkpoint selection",
+        "local_audit": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\tinyface\\local_audit.json",
+        "local_audit_sha256": "f5f7602492d43bc29022edb0436f726dda21219453584e9d3206005e658bb91d",
+        "dataset_release_notes": [
+          "Official README/Table IX claim 2569 probe IDs; supplied complete MAT has 2563 unique probe IDs, 3728 images. Preserve MAT instead of inventing missing probes."
+        ]
+      }
+    },
+    "survface": {
+      "audit": {
+        "name": "survface",
+        "raw_root": "F:\\FaceX-Zoo\\QMUL-SurvFace",
+        "completed": true,
+        "all_images_decode": true,
+        "image_sha256_computed": true,
+        "source_snapshot": "d95f85301f7bd1f2e507e4ccb336a0521689f7ff10ee21f14b83476c402d6517",
+        "groups": {
+          "training": {
+            "images": 220888,
+            "height_min": 7,
+            "height_max": 124,
+            "width_min": 5,
+            "width_max": 106
+          },
+          "gallery": {
+            "images": 60294,
+            "height_min": 6,
+            "height_max": 116,
+            "width_min": 5,
+            "width_max": 93
+          },
+          "registered_probe": {
+            "images": 60423,
+            "height_min": 7,
+            "height_max": 91,
+            "width_min": 5,
+            "width_max": 78
+          },
+          "unmated_probe": {
+            "images": 121736,
+            "height_min": 7,
+            "height_max": 123,
+            "width_min": 3,
+            "width_max": 94
+          },
+          "verification": {
+            "images": 10051,
+            "height_min": 8,
+            "height_max": 116,
+            "width_min": 6,
+            "width_max": 94
+          }
+        },
+        "training_identities": 5319,
+        "registered_gallery_identities": 3000,
+        "registered_probe_identities": 3000,
+        "protocol_metadata_sha256": {
+          "Face_Identification_Test_Set\\gallery_img_ID_pairs.mat": "aa0f4c476a6deec558b610e820d3099617a02cf5e6a5d31f4cd47bd62b307c5d",
+          "Face_Identification_Evaluation\\gallery_img_ID_pairs.mat": "aa0f4c476a6deec558b610e820d3099617a02cf5e6a5d31f4cd47bd62b307c5d",
+          "Face_Identification_Test_Set\\mated_probe_img_ID_pairs.mat": "730452b1eb99b4e64f1c9a2fd2f8198b202cff828f6bfa10841b826413c0f7c6",
+          "Face_Identification_Evaluation\\mated_probe_img_ID_pairs.mat": "f12d0c3797c490a93f4fcf9a8426a73d2afdf581ed40a14548dee2e41afcf861",
+          "Face_Verification_Test_Set\\positive_pairs_names.mat": "859d40272ca16687173ccfb83d620b2abcfcbd2e148f850107dcec9d32794e41",
+          "Face_Verification_Test_Set\\negative_pairs_names.mat": "e78f3efac0c6e4018920afc657361b5963888cd84306976f920924a44db5679f",
+          "verification_unreferenced_images": 138,
+          "readme.txt": "ce97f44c6ddeefd758391caa3c18b56cbf557b7f03ac86791a6cea8fb3c8f852",
+          "Face_Identification_Evaluation/test_open_set_face_identification.m": "4a660689616704355d1acc73a982eae8dd7336fdd8008df8b20c4b916645c6d7"
+        },
+        "notes": [
+          "Official website training 220890 differs from UCFace/local release 220888; website total 463507 differs from local identification total 463341. No official archive hash available."
+        ],
+        "release_identity": "local MAT/count/decode verified; byte identity to author archive unconfirmed",
+        "image_hashes": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\survface\\image_hashes.csv",
+        "image_hashes_sha256": "7d999d749081c892d03b5fab8779d13e381f873ba95e7a81cef7a93112da3c39",
+        "training_manifest": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\survface\\training_manifest.csv",
+        "training_manifest_sha256": "9a292d89e48b908d1501f1aa6796038df2f6edb1fed881c9e2af96d4ee452323",
+        "evaluation_manifest": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\survface\\evaluation_manifest.csv",
+        "evaluation_manifest_sha256": "57b88506c02f009692442bbc7a9b0575c124f9d269b00e3f263d4eaa66e91a4a"
+      },
+      "protocol": {
+        "name": "survface",
+        "raw_root": "F:\\FaceX-Zoo\\QMUL-SurvFace",
+        "num_classes": 5319,
+        "images": 220888,
+        "train_list": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\survface\\train_list.txt",
+        "train_sha256": "e453d86589ceb9b5c8b535d2385d06bf28635a7ab69af6aafe34d191ef725df0",
+        "training_manifest": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\survface\\training_manifest.csv",
+        "training_manifest_sha256": "9a292d89e48b908d1501f1aa6796038df2f6edb1fed881c9e2af96d4ee452323",
+        "evaluation_manifest": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\survface\\evaluation_manifest.csv",
+        "evaluation_manifest_sha256": "57b88506c02f009692442bbc7a9b0575c124f9d269b00e3f263d4eaa66e91a4a",
+        "identity_disjoint": true,
+        "evaluation_identities": 5319,
+        "identity_check_scope": "native IDs verified where available; official distractor identity disjointness relies on dataset protocol",
+        "evaluation_images_without_native_identity": 28476,
+        "all_images_decode": true,
+        "source": "UCFace Supplement II-A/Table IX",
+        "existing_ronbun_calibration_overlap_images": 44683,
+        "ronbun_calibration_reuse": "requires new protocol review; no automatic reuse with this FR model",
+        "validation": "none; all official training images used, no test-based checkpoint selection",
+        "local_audit": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\survface\\local_audit.json",
+        "local_audit_sha256": "8309b518645fc5236be4bcaa7a56c413a9d2bc386727c1f78b68c29d5396a61e",
+        "dataset_release_notes": [
+          "Official website training 220890 differs from UCFace/local release 220888; website total 463507 differs from local identification total 463341. No official archive hash available."
+        ]
+      }
+    }
+  },
+  "campaign": {
+    "shared_parent": 1,
+    "datasets": [
+      "tinyface",
+      "survface"
+    ],
+    "heads": [
+      "arcface",
+      "adaface",
+      "magface"
+    ],
+    "repeats": 5,
+    "finetune_models": 30,
+    "exports": 30,
+    "scface_enabled": false
+  },
+  "validation": {
+    "pytest_passed": 100,
+    "pytest_failed": 0,
+    "fresh_kernel_planned_notebooks_passed": 5,
+    "full_fr_training_executed": false,
+    "actual_ronbun_integration_executed": false,
+    "continuous_fiqa_executed": false
+  },
+  "fiqa_capacity_proposal": {
+    "status": "proposal_only_not_applied",
+    "seed": 8972,
+    "development_fraction": 0.4,
+    "safety_fraction": 0.3,
+    "native_unknown_identities": 2319,
+    "native_unknown_images": 93260,
+    "anonymous_test_only_images": 28476,
+    "groups": {
+      "fit": {
+        "identities": 623,
+        "images": 21138
+      },
+      "safety": {
+        "identities": 306,
+        "images": 14113
+      },
+      "test_known_unknown": {
+        "identities": 1390,
+        "images": 58009
+      }
+    },
+    "fit_requirements": {
+      "fit_non_mated_minimum_in_current_code": 20,
+      "safety_non_mated_minimum_in_current_code": 20,
+      "expected_tail_images_at_fpir_0_01": {
+        "fit": 211.38,
+        "safety": 141.13
+      }
+    },
+    "gallery": "unchanged official 3000 registered IDs",
+    "calibration_source": "official non-mated evaluation pool; reserve before score inspection and exclude from final FIQA test",
+    "training_split": "unchanged complete official FR training set",
+    "official_evaluation_equivalent": false,
+    "limitations": [
+      "Proposal changes non-mated test denominator; cannot claim exact UCFace evaluation reproduction",
+      "Fit sees known-unknown native IDs; anonymous distractors kept test-only create a possible mixture/domain shift",
+      "Repeated images per identity are correlated; image counts are not independent sample counts",
+      "No quality-bin coverage, embeddings, score fitting, PQ training, thresholds, or formal FPIR guarantee verified",
+      "Current ronbun per-image unknown labels need true-native identity grouping before fit/safety use"
+    ]
+  },
+  "interpretation": "fine-tune/reports/local_qmul_integrity_and_fiqa_20261011_v1.md",
+  "preservation": {
+    "raw_inputs_read_only": true,
+    "c_ronbun_not_modified": true,
+    "detailed_image_hash_csv_git_ignored": true,
+    "compact_report_git_visible": true
+  }
+}

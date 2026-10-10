@@ -7,6 +7,9 @@ import os
 import time
 import logging
 import random
+import json
+import uuid
+from pathlib import Path
 from typing import Dict, Any, Optional
 
 import numpy as np
@@ -40,6 +43,10 @@ except ImportError:
 logger = logging.getLogger("fine_tune.trainer")
 
 
+class TrainingStopped(RuntimeError):
+    """A requested stop after an optimizer step, with resumable state saved."""
+
+
 def set_seed(seed: int = 8972):
     """Set random seed for reproducibility across random, numpy, torch, cuda (goal.md default: 8972)."""
     random.seed(seed)
@@ -69,6 +76,29 @@ class AverageMeter:
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count if self.count != 0 else 0.0
+
+
+class DeferredLossMeter(AverageMeter):
+    """Batch scalar transfers, retaining the original ordered Python summation."""
+
+    def __init__(self, sync_batches=20):
+        super().__init__()
+        if type(sync_batches) is not int or sync_batches < 1:
+            raise ValueError("LOSS_SYNC_BATCHES must be a positive integer")
+        self.sync_batches = sync_batches
+        self.pending = []
+
+    def update_tensor(self, loss, n):
+        self.pending.append((loss.detach(), n))
+        if len(self.pending) >= self.sync_batches:
+            self.flush()
+
+    def flush(self):
+        if self.pending:
+            values = torch.stack([value for value, _ in self.pending]).cpu().tolist()
+            for value, (_, count) in zip(values, self.pending):
+                self.update(value, count)
+            self.pending.clear()
 
 
 class Trainer:
@@ -138,12 +168,19 @@ class Trainer:
         self.criterion = nn.CrossEntropyLoss().to(device)
         self.total_epochs = int(train_cfg.get("epoches", 40))
         self.print_freq = int(train_cfg.get("print_freq", 20))
+        self.loss_sync_batches = train_cfg.get("loss_sync_batches", 20)
         self.save_freq = int(train_cfg.get("save_freq", 5))
         self.keep_raw_results = bool(config.get("project", {}).get("keep_raw_results", True))
         self.seed = int(config.get("project", {}).get("seed", 8972))
         self.last_periodic_ckpt: Optional[str] = None
         self.saved_checkpoints: Dict[str, str] = {}
         self.last_saved_ckpt: Optional[str] = None
+        self.resume_batch = 0
+        self.resume_meter = None
+        self._recovery_clock = time.monotonic()
+        self._owned_recovery = None
+        self._model_prefix = "model"
+        self.progress_path = Path(self.checkpoint_manager.checkpoint_dir) / "progress.json"
 
         # Build full training config and canonical config hash
         self.train_config = extract_model_and_train_config(
@@ -161,13 +198,54 @@ class Trainer:
         self.config_hash = compute_config_hash(self.train_config)
         self.train_config["config_hash"] = self.config_hash
 
+    def _progress(self, phase, **values):
+        payload = {"phase": phase, "seed": self.seed, "head": self.head_type, "stage": self.stage,
+                   "epoch": self.cur_epoch, "total_epochs": self.total_epochs, "time_unix": time.time(),
+                   "last_checkpoint": self.last_saved_ckpt, **values}
+        temp = self.progress_path.with_suffix(".tmp")
+        temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temp, self.progress_path)
+
+    def _recovery(self, next_batch, meter):
+        import copy
+        filename = f"{self._model_prefix}_recovery_e{self.cur_epoch}_b{next_batch}_{uuid.uuid4().hex[:8]}.pt"
+        path = self.checkpoint_manager.save_checkpoint(
+            filename, self.model, self.optimizer, self.scheduler, epoch=self.cur_epoch - 1,
+            batch_idx=next_batch, extra_meta={"completed": False, "is_smoke": False,
+                "seed": self.seed, "stage": self.stage, "head": self.head_type,
+                "parent_hash": self.parent_hash, "config": self.train_config,
+                "history": copy.deepcopy(self.history), "total_epochs": self.total_epochs,
+                "execution_settings": self.config,
+                "epoch_state": {"epoch": self.cur_epoch, "next_batch": next_batch,
+                                "loss_sum": meter.sum, "loss_count": meter.count}})
+        old = self._owned_recovery
+        self._owned_recovery = self.last_saved_ckpt = path
+        # Recovery is a rolling resume cache, distinct from KEEP_RAW_RESULTS.
+        # Only a prior cache created by this process can be removed.
+        if old and old != path:
+            Path(old).unlink(missing_ok=True)
+        self._recovery_clock = time.monotonic()
+        logger.info("Recovery checkpoint: %s", path)
+
     def train_one_epoch(self, epoch: int) -> float:
         """Run training for one epoch."""
         self.model.train()
-        loss_meter = AverageMeter()
+        loss_meter = DeferredLossMeter(self.loss_sync_batches)
+        offset = self.resume_batch
+        sampler = getattr(self.train_loader, "batch_sampler", None)
+        if hasattr(sampler, "set_epoch"):
+            sampler.set_epoch(epoch, offset)
+        elif offset:
+            raise ValueError("Mid-epoch resume requires EpochBatchSampler")
+        if self.resume_meter:
+            loss_meter.sum, loss_meter.count = self.resume_meter
+            loss_meter.avg = loss_meter.sum / max(loss_meter.count, 1)
+        self.resume_batch, self.resume_meter = 0, None
+        total = getattr(sampler, "total_batches", len(self.train_loader))
         start_time = time.time()
+        self._progress("training", batches_completed=offset, total_batches=total)
 
-        for batch_idx, (images, labels) in enumerate(self.train_loader):
+        for batch_idx, (images, labels) in enumerate(self.train_loader, start=offset):
             try:
                 images = images.to(self.device, non_blocking=True)
                 labels = labels.to(self.device, non_blocking=True).long()
@@ -185,27 +263,45 @@ class Trainer:
                 loss.backward()
                 self.optimizer.step()
 
-                loss_meter.update(loss.item(), images.size(0))
+                loss_meter.update_tensor(loss, images.size(0))
             except Exception as e:
                 logger.error(f"Training step error [epoch {epoch}, batch {batch_idx}]: {e}", exc_info=True)
                 raise
 
-            if batch_idx % self.print_freq == 0:
+            done = batch_idx + 1
+            stop_path = self.config.get("runtime", {}).get("stop_file")
+            stopping = bool(stop_path and Path(stop_path).exists())
+            recovery_seconds = float(self.config["training"].get("recovery_minutes", 10)) * 60
+            if stopping or (recovery_seconds > 0 and time.monotonic() - self._recovery_clock >= recovery_seconds):
+                loss_meter.flush()  # Recovery must include every completed optimizer step.
+                self._recovery(done, loss_meter)
+            if stopping:
+                self._progress("stopped", batches_completed=done, total_batches=total, completed=False)
+                raise TrainingStopped(f"Safe stop; resume explicitly from {self.last_saved_ckpt}")
+            if batch_idx % self.print_freq == 0 or done == total:
+                loss_meter.flush()
                 current_lr = self.optimizer.param_groups[0]["lr"]
                 elapsed = time.time() - start_time
+                rate = (done - offset) * self.train_loader.batch_sampler.batch_size / max(elapsed, 1e-9)
+                eta = (total - done) * self.train_loader.batch_sampler.batch_size / max(rate, 1e-9)
                 vram_mb = 0.0
                 if torch.cuda.is_available() and getattr(self.device, "type", "") == "cuda":
                     vram_mb = torch.cuda.memory_allocated(self.device) / (1024**2)
 
                 logger.info(
                     f"Epoch [{epoch}/{self.total_epochs}] "
-                    f"Step [{batch_idx}/{len(self.train_loader)}] "
+                    f"Step [{done}/{total}] {100 * done / total:.2f}% "
                     f"Loss: {loss_meter.avg:.4f} "
                     f"LR: {current_lr:.6f} "
                     f"VRAM: {vram_mb:.1f}MB "
-                    f"Time: {elapsed:.1f}s"
+                    f"Time: {elapsed:.1f}s Images/s: {rate:.1f} ETA(epoch train): {eta / 60:.1f}min"
                 )
+                self._progress("training", batches_completed=done, total_batches=total,
+                               epoch_percent=100 * done / total, loss=loss_meter.avg,
+                               images_per_second=rate, epoch_train_eta_seconds=eta)
 
+        loss_meter.flush()
+        self._finished_train_meter = loss_meter
         return loss_meter.avg
 
     def validate(self) -> float:
@@ -214,9 +310,15 @@ class Trainer:
             return 0.0
 
         self.model.eval()
-        val_loss_meter = AverageMeter()
+        self._progress("validation", batches_completed=0, total_batches=len(self.val_loader))
+        val_loss_meter = DeferredLossMeter(self.loss_sync_batches)
         with torch.no_grad():
             for batch_idx, (images, labels) in enumerate(self.val_loader):
+                stop = self.config.get("runtime", {}).get("stop_file")
+                if stop and Path(stop).exists():
+                    self._recovery(self.train_loader.batch_sampler.total_batches, self._finished_train_meter)
+                    self._progress("stopped", completed=False)
+                    raise TrainingStopped(f"Stopped during validation; resume from {self.last_saved_ckpt}")
                 try:
                     images = images.to(self.device, non_blocking=True)
                     labels = labels.to(self.device, non_blocking=True).long()
@@ -225,11 +327,16 @@ class Trainer:
                         loss = self.criterion(logits, labels) + torch.mean(loss_g)
                     else:
                         loss = self.criterion(logits, labels)
-                    val_loss_meter.update(loss.item(), images.size(0))
+                    val_loss_meter.update_tensor(loss, images.size(0))
+                    if batch_idx % self.print_freq == 0:
+                        val_loss_meter.flush()
+                        logger.info("Validation epoch %s step %s/%s loss %.4f", self.cur_epoch, batch_idx + 1, len(self.val_loader), val_loss_meter.avg)
+                        self._progress("validation", batches_completed=batch_idx + 1, total_batches=len(self.val_loader))
                 except Exception as e:
                     logger.error(f"Validation step error [batch {batch_idx}]: {e}", exc_info=True)
                     raise
 
+        val_loss_meter.flush()
         logger.info(f"Validation Loss: {val_loss_meter.avg:.4f}")
         return val_loss_meter.avg
 
@@ -281,6 +388,16 @@ class Trainer:
         if self.val_loader is not None and len(self.val_loader) > 0:
             self.history.setdefault("val_loss", [])
         self.cur_epoch = min(start_epoch, self.total_epochs)
+        state = meta.get("epoch_state") if meta else None
+        if state:
+            if int(state["epoch"]) != start_epoch:
+                raise ValueError("Recovery epoch metadata is inconsistent")
+            self.resume_batch = int(state["next_batch"])
+            self.resume_meter = (float(state["loss_sum"]), int(state["loss_count"]))
+            # A stop during validation can resume with the training epoch already
+            # consumed. The optimizer steps happened before the saved boundary.
+            if self.resume_batch > 0 and self.optimizer.state:
+                self.optimizer._opt_called = True
         return start_epoch
 
     def save_state_checkpoint(
@@ -352,6 +469,7 @@ class Trainer:
     def train(self, start_epoch: int = 1, model_prefix: str = "model") -> Dict[str, Any]:
         """Execute full training loop across epochs."""
         import copy
+        self._model_prefix = model_prefix
         # Preserve restored history if available; otherwise initialize
         if self.history and self.history.get("epochs") and len(self.history["epochs"]) > 0:
             history = self.history
@@ -378,13 +496,13 @@ class Trainer:
                 self.epochs_trained_in_run += 1
                 avg_loss = self.train_one_epoch(epoch)
                 current_lr = self.optimizer.param_groups[0]["lr"]
-
+                val_loss = None
+                if self.val_loader is not None and len(self.val_loader) > 0:
+                    val_loss = self.validate()
                 history["epochs"].append(epoch)
                 history["train_loss"].append(avg_loss)
                 history["lr"].append(current_lr)
-
-                if self.val_loader is not None and len(self.val_loader) > 0:
-                    val_loss = self.validate()
+                if val_loss is not None:
                     history["val_loss"].append(val_loss)
 
                 self.scheduler.step()
@@ -433,6 +551,7 @@ class Trainer:
                     elif epoch == self.total_epochs:
                         logger.info(f"[Formal Complete] Saved final epoch {epoch} checkpoint to {saved_path}")
 
+            self._progress("completed", completed=True)
             logger.info("Training loop completed successfully.")
             return history
         except Exception as e:

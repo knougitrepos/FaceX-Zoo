@@ -1,5 +1,7 @@
 # VGGFace2 dataset (HuggingFace clone; large archives)
 VGGFace2/
+tinyface/
+QMUL-SurvFace/
 
 
 paper/
@@ -14,4 +16,4 @@ fine-tune/data/
 __pycache__/
 *.py[cod]
 .pytest_cache/
-.ipynb_checkpoints/
+.ipynb_checkpoints/

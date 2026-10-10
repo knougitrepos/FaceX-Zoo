@@ -25,10 +25,12 @@ import yaml
 from .checkpoint_manager import (
     CheckpointManager, compute_sha256, compute_config_hash, load_checkpoint,
     verify_parent_checkpoint, validate_checkpoint_for_export,
+    extract_model_and_train_config, compare_configs,
 )
 from .dataset import VGGFace2ArchiveInspector, build_dataloader, validate_dataset_files, resolve_image_path
 from .model_builder import build_model
-from .trainer import Trainer, set_seed
+from .trainer import Trainer, set_seed, TrainingStopped
+from .finetune_protocol import default_profiles, verify_protocol
 
 HEAD_NAMES = ("arcface", "adaface", "magface")
 
@@ -50,9 +52,15 @@ def resolve_settings(base_dir, settings_path=None, overrides=None, require_saved
         head: yaml.safe_load((root / f"fine-tune/configs/{head}.yaml").read_text(encoding="utf-8"))["head"]
         for head in HEAD_NAMES
     }
-    cfg["campaign"] = {"heads": list(HEAD_NAMES), "reuse_completed": True}
+    cfg["campaign"] = {"heads": list(HEAD_NAMES), "reuse_completed": True,
+                       "parent_seed": 8972, "pretrain_epochs": 40,
+                       "parent_checkpoint": None, "parent_sha256": None,
+                       "finetune_datasets": ["tinyface", "survface"]}
+    cfg["finetune_profiles"] = default_profiles(root)
     cfg["paths"]["report_dir"] = str(root / "fine-tune/reports/campaigns")
-    cfg["training"]["num_workers"] = 0
+    cfg["paths"]["cache_dir"] = str(root / "fine-tune/data/index_cache")
+    cfg["training"].update(num_workers=4, prefetch_factor=4, persistent_workers=True,
+                            torch_threads=2, recovery_minutes=10, loss_sync_batches=20)
     if settings_path and Path(settings_path).is_file():
         cfg = merge_settings(cfg, json.loads(Path(settings_path).read_text(encoding="utf-8")))
     elif require_saved:
@@ -69,9 +77,27 @@ def validate_settings(cfg):
         raise ValueError("SEEDS must contain unique integers in [0, 2**32)")
     if not heads or len(heads) != len(set(heads)) or any(h not in HEAD_NAMES for h in heads):
         raise ValueError(f"HEADS must contain unique choices from {HEAD_NAMES}")
-    # Notebook execution deliberately uses single-process loading on every OS.
-    if int(cfg["training"]["num_workers"]) != 0:
-        raise ValueError("Notebook workflow requires NUM_WORKERS=0 (Windows/Jupyter safe mode).")
+    if type(cfg["training"]["num_workers"]) is not int or not 0 <= cfg["training"]["num_workers"] <= 12:
+        raise ValueError("NUM_WORKERS must be an integer in [0,12]; use the subprocess runner on Windows.")
+    if cfg["training"].get("prefetch_factor", 2) < 1 or cfg["training"].get("torch_threads", 2) < 1:
+        raise ValueError("PREFETCH_FACTOR and TORCH_THREADS must be positive")
+    sync_batches = cfg["training"].get("loss_sync_batches", 20)
+    if type(sync_batches) is not int or sync_batches < 1:
+        raise ValueError("LOSS_SYNC_BATCHES must be a positive integer")
+    if cfg["training"].get("recovery_minutes", 10) <= 0:
+        raise ValueError("RECOVERY_MINUTES must be positive for safe training recovery")
+    if cfg["campaign"].get("pretrain_epochs", 40) < 1:
+        raise ValueError("PRETRAIN_EPOCHS must be positive")
+    if bool(cfg["campaign"].get("parent_checkpoint")) != bool(cfg["campaign"].get("parent_sha256")):
+        raise ValueError("Specify both PARENT_CHECKPOINT and PARENT_SHA256, or leave both None")
+    parent_seed = cfg["campaign"].get("parent_seed", 8972)
+    if type(parent_seed) is not int or not 0 <= parent_seed < 2**32:
+        raise ValueError("PARENT_SEED must be in [0,2**32)")
+    targets = cfg["campaign"].get("finetune_datasets", ["survface"])
+    if not targets or len(set(targets)) != len(targets) or any(t not in cfg["finetune_profiles"] for t in targets):
+        raise ValueError("Select unique FINETUNE_DATASETS from the declared profiles")
+    if any(not cfg["finetune_profiles"][t].get("enabled",True) for t in targets):
+        raise ValueError("SCFace/unavailable dataset training disabled until acquisition and protocol verification")
     if list(cfg["dataset"]["input_size"]) != [112, 112]:
         raise ValueError("Current MobileFaceNet/export architecture requires INPUT_SIZE=(112,112).")
     if cfg["backbone"]["type"] != "MobileFaceNet" or (cfg["backbone"]["out_h"], cfg["backbone"]["out_w"]) != (7, 7):
@@ -191,19 +217,30 @@ def make_loaders(cfg):
     loaders = []
     for key, is_train in (("train_list", True), ("val_list", False)):
         index = ds.get(key)
+        if key == "val_list" and index is None:
+            loaders.append(None)
+            continue
         if not index or not Path(index).is_file() or Path(index).stat().st_size == 0:
             raise FileNotFoundError(f"Required nonempty {key}: {index}")
         _, missing = validate_dataset_files(ds["raw_root"], index, max_check=20)
         if missing:
-            raise FileNotFoundError(f"Missing image: {missing[0]}")
+            raise FileNotFoundError(
+                f"Missing image: {missing[0]}. Index creation does not extract images. "
+                "For VGGFace2 use notebook 01 with EXTRACT_TRAIN_ARCHIVE=True; for a target split check its verified manifest. "
+                f"or check DATASET['raw_root']={ds['raw_root']!r}."
+            )
         loader = build_dataloader(
             data_root=ds["raw_root"], index_file=index,
             batch_size=train["batch_size"], num_workers=train["num_workers"], is_train=is_train,
             target_size=tuple(ds["input_size"]), pixel_mean=ds["pixel_mean"], pixel_std=ds["pixel_std"],
+            cache_dir=cfg.get("paths", {}).get("cache_dir"), seed=cfg.get("project", {}).get("seed", 8972),
+            prefetch_factor=train.get("prefetch_factor", 2), persistent_workers=train.get("persistent_workers", True),
         )
         if len(loader) == 0:
             raise ValueError(f"No usable batches in {key}; training drops incomplete batches")
-        if any(label < 0 or label >= ds["num_classes"] for _, label in loader.dataset.samples):
+        samples = loader.dataset.samples
+        invalid = (np.any(samples.labels < 0) or np.any(samples.labels >= ds["num_classes"])) if hasattr(samples, "labels") else any(label < 0 or label >= ds["num_classes"] for _, label in samples)
+        if invalid:
             raise ValueError(f"Label outside NUM_CLASSES in {key}")
         loaders.append(loader)
     return tuple(loaders)
@@ -213,14 +250,20 @@ def plan_matrix(cfg, stage):
     validate_settings(cfg)
     if stage not in ("pretrain", "finetune", "export"):
         raise ValueError(stage)
-    heads = ["arcface"] if stage == "pretrain" else cfg["campaign"]["heads"]
-    return [{"stage": stage, "head": h, "seed": seed,
-             "run_id": f"{stage}_{h}_seed{seed}"}
-            for seed in cfg["project"]["seed_list"] for h in heads]
+    if stage == "pretrain":
+        seed = cfg["campaign"]["parent_seed"]
+        return [{"stage": stage, "head": "arcface", "seed": seed, "run_id": f"pretrain_arcface_seed{seed}"}]
+    return [{"stage": stage, "head": h, "seed": seed, "dataset": dataset,
+             "run_id": f"{stage}_{dataset}_{h}_seed{seed}"}
+            for dataset in cfg["campaign"]["finetune_datasets"]
+            for seed in cfg["project"]["seed_list"] for h in cfg["campaign"]["heads"]]
 
 
-def checkpoint_path(cfg, stage, head, seed):
-    run_dir = Path(cfg["paths"]["checkpoint_dir"]) / f"{stage}_{head}_seed{seed}"
+def checkpoint_path(cfg, stage, head, seed, dataset=None):
+    if stage == "pretrain":
+        seed = cfg["campaign"]["parent_seed"]
+    prefix = f"{stage}_{dataset or cfg['dataset']['name']}_{head}" if stage != "pretrain" else f"{stage}_{head}"
+    run_dir = Path(cfg["paths"]["checkpoint_dir"]) / f"{prefix}_seed{seed}"
     dim = cfg["backbone"]["feat_dim"]
     filename = (f"pretrain_mobilefacenet_{dim}d.pt" if stage == "pretrain" else
                 f"finetune_mobilefacenet_{dim}d_{head}_epoch_{cfg['training']['epoches']}.pt")
@@ -235,26 +278,67 @@ def _formal_device(cfg):
     return device
 
 
+def validate_paper_parameters(cfg):
+    """Protect the low-resolution baseline recipe while tuning execution settings."""
+    required = {"optimizer": "adam", "lr": 0.001, "epoches": 40, "batch_size": 64,
+                "milestones": [10, 20, 30], "lr_decay_ratio": 0.1}
+    for key, value in required.items():
+        if cfg["training"][key] != value:
+            raise ValueError(f"Paper baseline requires training.{key}={value!r}")
+    if cfg["backbone"]["feat_dim"] != 1024 or cfg["backbone"]["dropout_rate"] != 0.6:
+        raise ValueError("Main-paper MobileFaceNet baseline requires 1024D/dropout 0.6")
+    expected = {"arcface": {"margin_arc": 0.6, "scale": 64.0},
+                "adaface": {"m": 0.4, "h": 0.333, "scale": 64.0},
+                "magface": {"l_a": 10.0, "u_a": 110.0, "l_margin": 0.45, "u_margin": 0.8, "lamda": 20.0}}
+    for head in cfg["campaign"]["heads"]:
+        for key, value in expected[head].items():
+            if cfg["heads"][head][key] != value:
+                raise ValueError(f"Paper low-resolution baseline requires {head}.{key}={value}")
+
+
 def _run_one(cfg, row, resume_path=None, smoke=False):
     cfg = copy.deepcopy(cfg)
     cfg["project"]["seed"] = row["seed"]
+    torch.set_num_threads(cfg["training"].get("torch_threads", 2))
+    cv2.setNumThreads(1)
     set_seed(row["seed"])
     stage, head, seed = row["stage"], row["head"], row["seed"]
+    if stage == "pretrain":
+        cfg["training"]["epoches"] = cfg["campaign"]["pretrain_epochs"]
+    else:
+        profile = cfg["finetune_profiles"][row["dataset"]]
+        if not smoke:
+            verify_protocol(profile)
+            validate_paper_parameters(cfg)
+        cfg["dataset"] = merge_settings(cfg["dataset"], profile)
     final_path = checkpoint_path(cfg, stage, head, seed)
     run_dir = final_path.parent if not smoke else Path(cfg["paths"]["checkpoint_dir"]) / "smoke" / row["run_id"]
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu") if smoke else _formal_device(cfg)
     parent_hash = None
     parent = None
-    model = trainer = optimizer = None
+    model = trainer = optimizer = train_loader = val_loader = None
     try:
         if stage == "finetune" and not smoke:
-            p = checkpoint_path(cfg, "pretrain", "arcface", seed)
+            p = Path(cfg["campaign"].get("parent_checkpoint") or checkpoint_path(cfg, "pretrain", "arcface", cfg["campaign"]["parent_seed"]))
             hp = p.with_name(p.stem + "_hash.json")
-            expected_hash = json.loads(hp.read_text(encoding="utf-8"))["sha256"]
+            expected_hash = cfg["campaign"].get("parent_sha256") or json.loads(hp.read_text(encoding="utf-8"))["sha256"]
             parent, parent_hash = verify_parent_checkpoint(
                 str(p), expected_hash=expected_hash, require_hash=True, require_completed=True,
-                expected_seed=seed, target_epoch=cfg["training"]["epoches"],
+                expected_seed=cfg["campaign"]["parent_seed"], target_epoch=cfg["campaign"]["pretrain_epochs"],
             )
+            parent_cfg = parent.get("config", {})
+            if parent_cfg.get("dataset", {}).get("name") != "VGGFace2":
+                raise ValueError("Common parent must declare VGGFace2 pretraining")
+            for key in ("feat_dim", "dropout_rate"):
+                if parent_cfg.get("backbone", {}).get(key) != cfg["backbone"][key]:
+                    raise ValueError(f"Common parent backbone.{key} differs")
+            for key in ("input_size", "pixel_mean", "pixel_std"):
+                actual = parent_cfg.get("preprocessing", {}).get(key)
+                desired = cfg["dataset"][key]
+                if key == "input_size" and actual is not None:
+                    actual, desired = list(actual), list(desired)
+                if actual != desired:
+                    raise ValueError(f"Common parent preprocessing.{key} differs")
         head_cfg = dict(cfg["heads"][head], num_class=cfg["dataset"]["num_classes"])
         model = build_model(cfg["backbone"], head_cfg).to(device)
         if parent is not None:
@@ -318,6 +402,10 @@ def _run_one(cfg, row, resume_path=None, smoke=False):
                 "requested_keep_raw_results": trainer.keep_raw_results,
                 "device": str(device), "gpu": torch.cuda.get_device_name(device) if device.type == "cuda" else None}
     finally:
+        for loader in (train_loader, val_loader):
+            iterator = getattr(loader, "_iterator", None)
+            if iterator is not None:
+                iterator._shutdown_workers()
         del trainer, optimizer, model, parent
         gc.collect()
         if torch.cuda.is_available():
@@ -334,8 +422,8 @@ def _matrix(cfg, stage, operation):
             print(f"[{len(rows)+1}/{len(plan)}] {row['run_id']}", flush=True)
             try:
                 result = operation(row)
-            except Exception as exc:
-                rows.append({**row, "status": "failed", "completed": False, "error": str(exc)})
+            except BaseException as exc:
+                rows.append({**row, "status": "stopped" if isinstance(exc, TrainingStopped) else "failed", "completed": False, "error": str(exc)})
                 raise
             rows.append(result)
         return rows
@@ -362,14 +450,33 @@ def run_training_matrix(cfg, stage, resume_checkpoints=None, smoke=False):
 
 def _export_one(cfg, row):
     head, seed = row["head"], row["seed"]
-    path = checkpoint_path(cfg, "finetune", head, seed)
+    path = checkpoint_path(cfg, "finetune", head, seed, row["dataset"])
     payload = load_checkpoint(str(path))
+    parent_path = Path(cfg["campaign"].get("parent_checkpoint") or checkpoint_path(cfg, "pretrain", "arcface", cfg["campaign"]["parent_seed"]))
+    parent_hash = cfg["campaign"].get("parent_sha256") or json.loads(parent_path.with_name(parent_path.stem + "_hash.json").read_text(encoding="utf-8"))["sha256"]
+    _, parent_hash = verify_parent_checkpoint(str(parent_path), expected_hash=parent_hash, require_completed=True,
+                                              expected_seed=cfg["campaign"]["parent_seed"], target_epoch=cfg["campaign"]["pretrain_epochs"])
     validate_checkpoint_for_export(payload, target_epoch=cfg["training"]["epoches"],
-                                   expected_seed=seed, expected_head=head, expected_stage="finetune")
+                                   expected_seed=seed, expected_head=head, expected_stage="finetune",
+                                   expected_parent_hash=parent_hash)
     stored = payload["config"]
     if compute_config_hash(stored) != payload["config_hash"]:
         raise ValueError("Source checkpoint config hash mismatch")
     source_hash = compute_sha256(str(path))
+    profile = cfg["finetune_profiles"][row["dataset"]]
+    verify_protocol(profile)
+    if stored["dataset"]["name"] != row["dataset"] or stored["dataset"]["train_list_hash"] != compute_sha256(profile["train_list"]):
+        raise ValueError("Export source does not match the selected dataset protocol")
+    selected = copy.deepcopy(cfg)
+    selected["project"]["seed"] = seed
+    selected["dataset"] = merge_settings(selected["dataset"], profile)
+    model = build_model(selected["backbone"], dict(selected["heads"][head], num_class=profile["num_classes"]))
+    expected = extract_model_and_train_config(model, selected, seed=seed, stage="finetune",
+                                              head_type=head, parent_hash=payload.get("parent_hash"))
+    del model
+    differences = compare_configs(stored, expected, full_strict=True)
+    if differences:
+        raise ValueError("Export settings differ from trained checkpoint: " + "; ".join(differences))
     dim = stored["backbone"]["feat_dim"]
     out_dir = Path(cfg["paths"]["export_dir"]) / row["run_id"]
     filename = f"exported_mobilefacenet_{dim}d_{head}_seed{seed}.pt"
@@ -387,6 +494,9 @@ def _export_one(cfg, row):
                     "execution_settings": payload.get("extra_meta", {}).get("execution_settings"),
                     "preprocessing": {**stored.get("preprocessing", {}), "color": "BGR", "alignment": "resize_only"},
                     "parent_hash": payload.get("parent_hash"), "epochs": payload["epoch"],
+                    "common_parent_seed": cfg["campaign"]["parent_seed"],
+                    "protocol_record": json.loads(Path(profile["protocol_record"]).read_text(encoding="utf-8")),
+                    "reproduction_scope": "paper-specified baseline settings; shared parent and undocumented initialization details are declared research choices",
                     "ronbun_integration": "not_executed", "fiqa_evaluation": "not_executed"}
         CheckpointManager(str(out_dir)).export_backbone_only(payload, filename, metadata,
                                                            target_feat_dim=dim, allow_overwrite=False)

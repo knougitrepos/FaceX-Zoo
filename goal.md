@@ -1,6 +1,6 @@
 # FaceX-Zoo 연구 목표 및 작업 기준
 
-- 작성일: 2026-10-09 KST
+- 작성일: 2026-10-09 KST / 학습 구조·최적화 기준 갱신: 2026-10-11 KST
 - 작업 저장소: `F:\FaceX-Zoo`
 - 작업 브랜치: **`add-adaface`**
 - 현재 상태: **구현 및 검증 중**. 전체 학습 완료나 UCFace 수치 재현을 의미하지 않는다.
@@ -64,22 +64,22 @@ FaceX-Zoo를 공통 학습 기반으로 사용하고 공식 AdaFace head를 통�
 
 고해상도·혼합 해상도 조건은 본문에서 각 원 논문의 hyperparameter를 따른다고 설명한다. 저해상도 설정을 그대로 사용해 LFW 등을 평가할 경우, 그것은 본 연구의 고정 checkpoint 교차 데이터셋 평가이며 논문의 모든 표와 동일한 조건이라는 뜻은 아니다.
 
-`112×112`, BGR, `(pixel - 127.5) / 128`, weight decay, augmentation 범위, dropout 위치, 데이터 분할, 사전학습 loss 등은 **논문 명시 / 공식 코드 / 본 연구 선택**으로 각각 분류한다. 이미 선택한 값도 검증 없이 논문 설정이라고 승격하지 않는다.
+입력 `112×112`와 horizontal flip·affine(rotation/scaling)은 보충자료 PDF 3쪽에서 확인된다. BGR, `(pixel - 127.5) / 128`, weight decay, augmentation의 수치 범위, dropout 위치, 사전학습 loss·일정의 세부는 **공식 코드 / 본 연구 선택**으로 따로 기록한다. 단순 resize를 얼굴 정렬로 표시하지 않는다.
 
 ## 4. Seed 정책: 기본값 8972
 
 **논문에서 별도의 seed 숫자를 지정하지 않은 경우 기본 seed는 `8972`로 한다.** 현재 확보한 본문에는 구체적인 seed 숫자가 확인되지 않았다. `8972`는 사용자 지정 재현성 값이며 논문 저자의 seed로 표현하지 않는다.
 
-- 설정의 기준값은 `fine-tune/configs/common.yaml`의 `project.seed: 8972`로 한다.
+- 사용자 설정은 노트북 첫 설정 셀이 우선이다. 우선순위는 `YAML 기본값 < 00의 저장 설정 < 현재 노트북 변수`다. 기본 seed는 `8972`다.
 - Python `random`, NumPy, PyTorch CPU/CUDA, DataLoader generator 및 worker 초기화가 같은 실행 seed 정책을 따르도록 한다.
 - seed 초기화는 모델 생성, 데이터 shuffle 및 augmentation에 앞서 수행한다.
 - 노트북의 기본값, Python 함수 기본값, fallback 값, 실행 안내를 통일한다. `42`를 별도 기본값으로 남기지 않는다.
 - 실제 seed, 분할 hash, 라이브러리 버전, deterministic 관련 옵션, GPU 정보를 manifest에 기록한다. seed만 같다고 환경 간 bitwise 동일성을 보장하지 않는다.
 - 반복 실험 시 각 run의 seed를 고유하게 지정한다. 논문의 5회 반복에 대응하는 본 프로젝트의 기본 학습 seed 목록은 **`[8972, 8973, 8974, 8975, 8976]`**으로 사전 선언한다. 이 목록 역시 본 연구 선택이다.
-- 하나의 seed로 세 head를 비교할 때 데이터 분할·전처리는 공유한다. 공통 부모를 공유하는지, run마다 부모를 다시 학습하는지는 학습 단계 설정에 명시한다.
+- **사전학습 부모는 1개만 생성한다.** `PARENT_SEED=8972`로 생성한 동일 backbone·SHA-256을 모든 후속 학습이 공유한다. 후속 학습의 `SEEDS`는 새 classifier 초기화·shuffle·augmentation의 반복이며 부모 5개를 뜻하지 않는다.
 - 논문 표마다 반복 횟수가 다를 수 있으므로 모든 실험에 5회를 일괄 적용하지 않는다. 학습 5회, 평가 fold, calibration split 반복을 서로 대체하거나 독립 표본처럼 합치지 않는다.
 
-**작성 시점의 구현 차이:** 현재 확인한 공통 설정·노트북·`set_seed` 기본값은 아직 `42`다. 이 문서는 목표값을 `8972`로 정하며, 이번 문서 작성만으로 실행 코드가 바뀌지는 않는다. 다음 학습 전 관련 경로를 모두 수정·검증해야 한다. 기존 완료 결과는 seed 변경을 이유로 덮어쓰거나 재명명하지 않는다.
+공통 부모 공유는 사용자가 승인한 연구 설계다. 논문은 pretrained backbone에 무작위 classifier를 연결하고 5회 반복한다고 설명하지만, 각 반복·head가 정확히 같은 부모 파일을 공유했다고 명시하지는 않는다. 이를 저자의 확인된 세부 절차로 표현하지 않는다. 기존 완료 결과는 seed·구조 변경을 이유로 덮어쓰거나 재명명하지 않는다.
 
 ## 5. 학습 단계와 데이터 계약
 
@@ -100,7 +100,21 @@ FaceX-Zoo를 공통 학습 기반으로 사용하고 공식 AdaFace head를 통�
 - `pretrain`, `finetune`, `export`의 입력·출력·설정·완료 상태를 각각 기록한다.
 - fine-tuning은 명시적으로 선택한 부모 checkpoint, 기대 SHA-256, 학습 완료 출처를 요구한다. hash 일치만으로 학습 완료를 판단하지 않는다.
 - 사전학습 loss와 데이터, 후속 학습 데이터·분할, backbone 업데이트 여부, classifier 초기화 정책을 실행 전에 고정한다.
-- 공통 ArcFace 부모에서 분기하거나 VGGFace2에서 두 단계 모두 학습하는 방식을 택할 수 있으나, 본문에서 확인되지 않은 부분은 본 연구 선택으로 기록한다. 임의로 SurvFace fine-tuning을 추가하지 않는다.
+- **공통 MobileFaceNet 부모 1개를 VGGFace2로 사전학습하고, 그 backbone을 독립적으로 복사하여 대상 저해상도 데이터셋의 공식 training split에서 ArcFace / AdaFace / MagFace를 각각 fine-tuning한다.** backbone도 업데이트하고 classifier는 대상 training identity 수에 맞게 새로 무작위 초기화한다. head 간 순차 전달 학습을 하지 않는다.
+- 02의 사전학습 loss는 ArcFace, 기본 일정은 40 epoch다. 이는 세부 사전학습 recipe가 공개되지 않아 채택한 구현 선택이며, 논문이 사전학습을 반드시 ArcFace로 40 epoch 하라고 명시한 것은 아니다. `PRETRAIN_EPOCHS`와 후속 학습의 논문 명시 40 epoch를 구분한다.
+- 03은 VGGFace2의 약 298만 장 목록을 다시 학습하지 않는다. 보충자료 II-A 및 Table IX의 대상 training split을 사용한다.
+
+| 후속 학습 대상 | Training identity | Training image | 기본 실행 범위 |
+| --- | ---: | ---: | --- |
+| QMUL-SurvFace | 5,319 | 220,888 | 우선 대상으로 선택 |
+| QMUL-TinyFace | 2,570 | 7,804 | F 드라이브 공식 원본에서 검증·연결 |
+| SCFace | 50 | 800 | 미확보: 학습 비활성화·선택 차단 |
+
+- 현재 기본 계획: 사전학습 부모 **1개**, **TinyFace·SurvFace × 3 head × 5 seed = 30개**, export 30개. SCFace는 확보·검증 후 명시적으로 활성화하기 전까지 제외한다. 모델 수와 epoch 수는 데이터 규모가 달라 직접 시간으로 환산하지 않는다.
+- 입력은 `F:/FaceX-Zoo/tinyface`와 `F:/FaceX-Zoo/QMUL-SurvFace`를 사용한다. 공식 MAT membership·원래 신원·전체 decode·SHA-256을 검증하고 `fine-tune/data/protocols/local_qmul_v1/`에 목록·audit를 기록한다. 원본 파일과 split은 수정하지 않으며 기존 C 경로 protocol은 보존한다.
+- 각 대상의 train/evaluation 목록, 원래 identity, 클래스·이미지 수와 hash를 확인한다. remapped evaluation label을 train identity와 직접 비교하지 않는다. test는 FR 학습·checkpoint 선택에 사용하지 않는다.
+- SurvFace의 신원 번호가 있는 평가 파일은 training identity와 겹치지 않음을 검사한다. `unmated_probe/distractors_*`는 파일에서 신원을 복원할 수 없으므로 공식 분할의 분리 조건에 의존한다고 기록하며 독립적인 신원 검증 완료로 표현하지 않는다.
+- 현재 `C:\ronbun` SurvFace training manifest의 44,683장은 과거 FIQA calibration으로 분류됐지만 모두 공식 `training_set` 안에 있다. 논문 training set 전체를 FR fine-tuning에 쓰면 이 과거 calibration cohort를 새 모델의 독립 calibration으로 자동 재사용해서는 안 된다. ronbun 연계 시 calibration/test 분리 설계를 별도로 확인한다. 이번 작업은 C 저장소의 목록을 수정하지 않는다.
 - 정식 학습과 smoke 실행은 명시적 설정으로 선택한다. 정식 입력이 없을 때 자동으로 dummy 실행으로 전환하지 않는다.
 - smoke 산출물에는 별도 경로와 상태를 부여하고 정식 부모·최종 baseline·성능 보고 대상으로 사용하지 못하게 한다.
 
@@ -146,6 +160,18 @@ FaceX-Zoo를 공통 학습 기반으로 사용하고 공식 AdaFace head를 통�
 - 단일 GPU에서 세 모델은 순차 실행을 기본으로 한다. 전체 epoch·반복 소요 시간은 실제 처리량으로 추정한다.
 - 이미지 해제·decode·hash·정렬은 GPU 학습과 별도 병목이므로 단계별 시간을 기록한다.
 
+### 실행 최적화 계약
+
+- 노트북은 별도 Python 학습 프로세스를 시작한다. Windows spawn worker가 노트북 셀·CUDA 모델을 다시 실행하지 않도록 `__main__` 진입점을 둔다.
+- `NUM_WORKERS`는 0/2/4를 실제 입력으로 비교하여 선택한다. `PREFETCH_FACTOR=2`, persistent worker, pinned memory와 비동기 전송을 사용한다. worker의 OpenCV/PyTorch 스레드는 1로 제한한다.
+- 수백만 개 경로·label은 디스크 memmap으로 공유하여 worker별 Python 문자열 복제를 줄인다. 원본 이미지와 학습 목록은 바꾸지 않는다.
+- sample별 seed/epoch/index로 augmentation을 결정하여 worker 수에 따라 입력 난수가 달라지지 않도록 한다. 이 난수 규칙은 checkpoint config에 기록하고 이전 규칙의 부분 학습을 조용히 이어받지 않는다.
+- batch 64, Adam, lr, epoch, head margin/scale, 1024D/dropout을 속도 목적으로 바꾸지 않는다. AMP, accumulation, subset, 조기 종료를 자동 적용하지 않는다.
+- 약 10분 간격과 안전한 중단 요청 시 완료된 optimizer step까지의 모델·optimizer·scheduler·RNG·batch 위치를 recovery checkpoint에 저장한다. progress.json과 console.log에 epoch/batch/처리량/ETA를 남긴다.
+- 2026-10-11 실제 Trainer 입력 구간 측정에 따라 `NUM_WORKERS=4`, `PREFETCH_FACTOR=4`, `LOSS_SYNC_BATCHES=20`을 권장한다. loss의 기록용 CPU 전송만 묶으며 optimizer 갱신은 매 batch 수행한다. 로그·recovery·epoch 종료 전에 완료된 batch의 loss를 원래 순서로 반영한다. 공식 학습 조건·데이터·입력 RNG는 유지하고 기존 recovery 재개 호환성을 검증한다. 짧은 반복 입력의 cache 속도를 전체 epoch 속도로 단정하지 않는다.
+- 노트북 커널 강제 종료는 학습 자식 프로세스를 안전 중단시키는 명령이 아니다. 먼저 실행 셀을 interrupt하고 stop 요청·recovery 저장을 확인한다. lock이 남으면 기록된 PID의 종료 여부를 확인한 후 수동 처리한다.
+- 새 학습 namespace `shared_parent_v2`를 사용하여 과거 VGGFace2 이중 학습·부분 결과를 보존한다. 처리량 측정은 accuracy·논문 수치 재현 증거가 아니다.
+
 ## 8. Export와 ronbun 연결
 
 모델별 export 묶음에는 다음을 포함한다.
@@ -162,11 +188,24 @@ FaceX-Zoo 내부에서 같은 클래스를 두 번 생성하여 비교한 것은
 
 ## 9. Continuous FIQA 및 결과 해석의 경계
 
+### 후속 평가의 공식 프로토콜 유지 원칙
+
+이 항목은 `C:\ronbun`에서 수행할 후속 평가의 연구 원칙을 기록한다. 현재 FaceX-Zoo의 FR 학습 단계에 새로운 평가 기능이나 실행 의무를 추가하는 것은 아니다.
+
+- 우선 UCFace의 데이터셋별 실험 방식을 기준으로 삼고, threshold 및 Continuous FIQA 실험은 각 데이터셋이 제공하는 공식 프로토콜을 유지한다. 모든 데이터셋을 일괄적으로 open-set identification으로 변환하지 않는다.
+- SurvFace처럼 공식 open-set 프로토콜이 제공되는 데이터셋은 해당 1:N open-set identification의 gallery/probe 구성과 평가 규칙에 따라 Continuous FIQA를 평가한다.
+- LFW는 UCFace와 같이 공식 1:1 verification 프로토콜을 사용한다. 공식 pairs/folds와 threshold 결정·평가 절차를 유지하며 임의의 1:N open-set 평가로 대체하지 않는다.
+- 그 외 데이터셋도 제공되는 공식 프로토콜과 지표를 따른다. TinyFace는 공식 closed-set ranking을 유지하며 FIQA threshold 실험을 위해 임의의 unknown probe를 추가하지 않는다. 공식 프로토콜에서 정의되지 않는 threshold 지표는 해당 데이터셋의 공식 결과로 보고하지 않는다.
+- 보정 전후 비교는 같은 공식 평가 조건을 사용한다. FIQA fit·safety 및 threshold 선택은 공식 프로토콜이 허용하는 training/development fold나 별도의 독립 보정 데이터로 처리한다. 최종 test를 보정 학습에 재사용하거나 fit 데이터를 확보하기 위해 공식 test의 신원·이미지를 임의로 제거하지 않는다. 구체적인 보정 데이터 확보·분리 방식은 후속 평가 저장소에서 공식 규칙과 독립성을 확인하여 확정한다.
+
 - 특징 norm의 평균·표준편차를 계산하는 것은 **norm 진단**이다. 이것만으로 Continuous FIQA 임계값 보정 실험을 수행했다고 기록하지 않는다.
 - 고정 checkpoint 내에서 같은 cohort·분할을 사용하여 보정 전후를 비교한다. backbone 교체 효과와 FIQA 추가 효과를 구분한다.
 - Origin과 PQ 모두 동일한 비교 원칙을 적용하고, 서로 다른 점수 공간에는 각각 보정한 threshold를 사용한다.
 - LFW 1:1 verification, SurvFace 1:N open-set identification, TinyFace closed-set ranking 등 프로토콜을 구분한다. 서로 다른 프로토콜의 threshold·수치를 직접 전이하지 않는다.
 - 고화질/저화질 데이터셋 간 차이를 이미지 품질만의 인과효과로 단정하지 않는다. identity, 규모, 도메인과 프로토콜 차이도 함께 명시한다.
+- FR의 논문 training split 전체와 FIQA fit 데이터를 별도로 관리한다. 기존 FR training 이미지 및 과거 calibration을 새 모델의 독립 fit으로 자동 재사용하지 않는다.
+- `fiqa_fit_capacity_20261011_v1.json`의 SurvFace native unknown identity별 fit/safety/test 분할은 과거 용량 검토 제안이며 적용되지 않았다. 위의 공식 프로토콜 유지 결정에 따라 이 파생 분할안을 현재 평가 계획으로 채택하지 않는다. 공식 test를 유지하면서 사용할 독립 calibration 데이터는 후속 평가 단계에서 별도로 확보·검증한다.
+- TinyFace에는 공식 non-mated probe가 없으며 probe-only threshold는 rank를 바꾸지 않는다. 공식 Rank-1 결과를 Continuous FIQA FPIR 효용의 증거로 사용하지 않는다.
 - Rank-1, TPIR, FPIR 등의 지표를 임의 값이나 mock 값으로 채우지 않는다. 미실행 항목은 `null` 또는 `미실행`으로 표시한다.
 - 경험적 FPIR 목표 충족이나 held-out 보정을 수학적 보장으로 표현하지 않는다.
 
@@ -184,18 +223,18 @@ FaceX-Zoo 내부에서 같은 클래스를 두 번 생성하여 비교한 것은
 
 2026-10-09 이전 검수에서 head 중심 테스트 17개 통과, 공식 AdaFace와 한 batch의 학습 수치 일치, GTX 1080 Ti 소규모 세 head 업데이트를 확인했다. 이는 전체 학습·실제 얼굴인식 평가·ronbun 통합 완료의 증거가 아니다.
 
-문서 작성 시점에 이전 검수 이후 import, smoke 구분, seed 초기화, 평가 미실행 표기 등에 대한 후속 코드 변경이 보인다. **후속 수정 전체를 다시 검수한 상태는 아니므로**, 과거 결함을 현재에도 모두 존재한다고 단정하거나 반대로 모두 해결됐다고 기록하지 않는다.
+2026-10-10 작업은 공통 부모 1개·대상 공식 training split·Windows spawn 최적화·batch recovery를 구현한다. 기본 seed는 코드·노트북·설정에서 8972다. 제한된 자동 테스트와 처리량 진단은 전체 정식 학습과 구분한다. 최신 검증 수와 처리량 근거는 `fine-tune/reports/`의 해당 보고서를 따른다.
 
-우선 작업 순서:
+2026-10-11 로컬 TinyFace169,403개·SurvFace473,392개 JPEG의 전체 decode/hash와 공식 MAT 참조를 검증하고 F 드라이브의 두 공식 training split을 연결했다. SCFace는 미확보로 실행을 제한한다. 기본 후속 모델은 두 대상 × 세 head × 다섯 seed =30개다. 검증100 tests/새 커널 계획5개와 데이터 수량 충돌·FIQA 용량/독립성 검토는 `fine-tune/reports/local_qmul_integrity_and_fiqa_20261011_v1.md` 및 JSON을 따른다. 정식 모델 학습과 FIQA는 이번 데이터 연결 작업에서 실행하지 않았다.
 
-1. 공통 설정·함수·노트북 기본 seed를 `8972`로 맞추고 실제 초기화·기록 경로를 검증한다.
-2. 새 커널의 노트북 import와 실행 순서를 검증한다.
-3. 실제 이미지 준비·경로·전처리·누락 처리·분할을 검증한다.
-4. 정식/smoke 모드 격리, 부모 완료 상태·기대 hash 확인을 검증한다.
-5. 실제 학습 상태 저장·재개와 모든 checkpoint의 부모·설정·seed 기록을 검증한다.
-6. 미측정 수치·고정된 가짜 이력·잘못된 완료 문구가 요약에 남지 않도록 확인한다.
-7. 실제 규모 메모리 시험 후 정식 사전학습·후속 학습을 수행한다.
-8. 명시적으로 선택한 완료 checkpoint를 export하고 실제 ronbun 경로를 검증한다.
+다음 실행 순서:
+
+1. 커널 재시작 후 00 첫 셀의 변수·새 출력 root를 확인하고 저장한다.
+2. 01에서 기존 VGGFace2 추출·목록을 확인한다. 이미 완료된 추출은 다시 실행하지 않는다.
+3. 02에서 짧은 worker 처리량을 확인하거나 공통 부모 1개를 정식 학습한다.
+4. 03에서 대상 프로필을 확인하고 공식 split 검증 후 세 head·5 seed를 학습한다.
+5. 04에서 같은 행렬의 완료 checkpoint를 export한다.
+6. ronbun의 1024D loader·전처리와 새로운 calibration 분리 계약을 검증한 뒤 Continuous FIQA 실험을 진행한다.
 
 ## 12. 완료 판정
 
