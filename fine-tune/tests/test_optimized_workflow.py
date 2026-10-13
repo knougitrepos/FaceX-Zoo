@@ -55,11 +55,13 @@ def test_low_resolution_parameters_cannot_change_for_speed():
     original = flow.resolve_settings(root)
     flow.validate_paper_parameters(original)
     for override in ({"training":{"batch_size":128}}, {"training":{"epoches":20}},
-                     {"heads":{"arcface":{"margin_arc":0.5}}}):
+                     {"heads":{"arcface":{"margin_arc":0.5}}},
+                     {"heads":{"cosface":{"margin":0.35}}},
+                     {"heads":{"cosface":{"scale":32.0}}}):
         with pytest.raises(ValueError,match="Paper"):
             flow.validate_paper_parameters(flow.merge_settings(original,override))
     assert len(flow.plan_matrix(original,"pretrain")) == 1
-    assert len(flow.plan_matrix(original,"finetune")) == 30
+    assert len(flow.plan_matrix(original,"finetune")) == 40
     expanded = flow.merge_settings(original,{"campaign":{"finetune_datasets":["survface","tinyface","scface"]}})
     with pytest.raises(ValueError,match="disabled"):
         flow.plan_matrix(expanded,"finetune")
@@ -77,7 +79,7 @@ def test_protocol_rejects_overlap_and_source_mutation(cfg):
         verify_protocol(profile)
 
 
-@pytest.mark.parametrize("head", ["arcface","adaface","magface"])
+@pytest.mark.parametrize("head", ["arcface","adaface","magface","cosface"])
 @pytest.mark.parametrize("stop_phase", ["training", "validation"])
 def test_mid_epoch_recovery_matches_uninterrupted_weights(cfg, tmp_path, monkeypatch, head, stop_phase):
     cfg = flow.merge_settings(cfg,{"training":{"epoches":2,"save_freq":1,"print_freq":1},

@@ -1,0 +1,183 @@
+{
+  "planned": 1,
+  "completed": 0,
+  "rows": [
+    {
+      "stage": "pretrain",
+      "head": "arcface",
+      "seed": 8972,
+      "run_id": "pretrain_arcface_seed8972",
+      "status": "stopped",
+      "completed": false,
+      "error": "Safe stop; resume explicitly from F:\\FaceX-Zoo\\fine-tune\\checkpoints\\shared_parent_v3\\pretrain_arcface_seed8972\\pretrain_mobilefacenet_1024d_recovery_e24_b22282_bf8e6570.pt"
+    }
+  ],
+  "status": "partial_or_smoke",
+  "not_started": [],
+  "effective_settings": {
+    "project": {
+      "name": "FaceX-Zoo-UCFace-Baselines",
+      "seed": 8972,
+      "seed_list": [
+        8972,
+        8973,
+        8974,
+        8975,
+        8976
+      ],
+      "keep_raw_results": true,
+      "device": "cuda:0"
+    },
+    "backbone": {
+      "type": "MobileFaceNet",
+      "feat_dim": 1024,
+      "out_h": 7,
+      "out_w": 7,
+      "dropout_rate": 0.6
+    },
+    "training": {
+      "optimizer": "adam",
+      "lr": 0.001,
+      "weight_decay": 0.0001,
+      "epoches": 40,
+      "milestones": [
+        10,
+        20,
+        30
+      ],
+      "lr_decay_ratio": 0.1,
+      "batch_size": 64,
+      "num_workers": 4,
+      "print_freq": 20,
+      "save_freq": 1,
+      "prefetch_factor": 4,
+      "persistent_workers": true,
+      "torch_threads": 2,
+      "recovery_minutes": 10,
+      "loss_sync_batches": 20
+    },
+    "dataset": {
+      "name": "VGGFace2",
+      "raw_root": "F:/FaceX-Zoo/VGGFace2",
+      "image_root": "F:/FaceX-Zoo/VGGFace2/train",
+      "train_archive": "F:\\FaceX-Zoo\\VGGFace2\\data\\vggface2_train.tar.gz",
+      "test_archive": "F:\\FaceX-Zoo\\VGGFace2\\data\\vggface2_test.tar.gz",
+      "meta_csv": "F:\\FaceX-Zoo\\VGGFace2\\meta\\identity_meta.csv",
+      "num_classes": 8631,
+      "input_size": [
+        112,
+        112
+      ],
+      "pixel_mean": 127.5,
+      "pixel_std": 128.0,
+      "processed_root": "F:/FaceX-Zoo/fine-tune/data/vggface2_processed",
+      "train_list": "F:/FaceX-Zoo/fine-tune/data/train_list.txt",
+      "val_list": "F:/FaceX-Zoo/fine-tune/data/val_list.txt"
+    },
+    "paths": {
+      "checkpoint_dir": "F:/FaceX-Zoo/fine-tune/checkpoints/shared_parent_v3",
+      "log_dir": "F:/FaceX-Zoo/fine-tune/logs",
+      "export_dir": "F:/FaceX-Zoo/fine-tune/checkpoints/exported/shared_parent_v3",
+      "report_dir": "F:/FaceX-Zoo/fine-tune/reports/campaigns",
+      "cache_dir": "F:/FaceX-Zoo/fine-tune/data/index_cache"
+    },
+    "heads": {
+      "arcface": {
+        "type": "ArcFace",
+        "feat_dim": 1024,
+        "num_class": 8631,
+        "margin_arc": 0.6,
+        "margin_am": 0.0,
+        "scale": 64.0
+      },
+      "adaface": {
+        "type": "AdaFace",
+        "feat_dim": 1024,
+        "num_class": 8631,
+        "m": 0.4,
+        "h": 0.333,
+        "scale": 64.0,
+        "t_alpha": 0.01
+      },
+      "magface": {
+        "type": "MagFace",
+        "feat_dim": 1024,
+        "num_class": 8631,
+        "margin_am": 0.0,
+        "scale": 64.0,
+        "l_a": 10.0,
+        "u_a": 110.0,
+        "l_margin": 0.45,
+        "u_margin": 0.8,
+        "lamda": 20.0
+      }
+    },
+    "campaign": {
+      "heads": [
+        "arcface",
+        "adaface",
+        "magface"
+      ],
+      "reuse_completed": true,
+      "parent_seed": 8972,
+      "pretrain_epochs": 40,
+      "parent_checkpoint": null,
+      "parent_sha256": null,
+      "finetune_datasets": [
+        "tinyface",
+        "survface"
+      ]
+    },
+    "finetune_profiles": {
+      "survface": {
+        "name": "survface",
+        "raw_root": "F:\\FaceX-Zoo\\QMUL-SurvFace",
+        "num_classes": 5319,
+        "expected_images": 220888,
+        "train_list": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\survface\\train_list.txt",
+        "val_list": null,
+        "protocol_record": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\survface\\protocol.json",
+        "training_manifest": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\survface\\training_manifest.csv",
+        "evaluation_manifest": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\survface\\evaluation_manifest.csv",
+        "enabled": true,
+        "local_audit_required": true,
+        "local_audit": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\survface\\local_audit.json",
+        "legacy_fiqa_manifest": "C:/ronbun/data/interim/survface/training_manifest.csv"
+      },
+      "tinyface": {
+        "name": "tinyface",
+        "raw_root": "F:\\FaceX-Zoo\\tinyface",
+        "num_classes": 2570,
+        "expected_images": 7804,
+        "train_list": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\tinyface\\train_list.txt",
+        "val_list": null,
+        "protocol_record": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\tinyface\\protocol.json",
+        "training_manifest": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\tinyface\\training_manifest.csv",
+        "evaluation_manifest": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\tinyface\\evaluation_manifest.csv",
+        "enabled": true,
+        "local_audit_required": true,
+        "local_audit": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\tinyface\\local_audit.json"
+      },
+      "scface": {
+        "name": "scface",
+        "raw_root": "F:\\FaceX-Zoo\\scface",
+        "num_classes": 50,
+        "expected_images": 800,
+        "train_list": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\scface\\train_list.txt",
+        "val_list": null,
+        "protocol_record": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\scface\\protocol.json",
+        "training_manifest": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\scface\\training_manifest.csv",
+        "evaluation_manifest": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\scface\\evaluation_manifest.csv",
+        "enabled": false,
+        "local_audit_required": false,
+        "local_audit": "F:\\FaceX-Zoo\\fine-tune\\data\\protocols\\local_qmul_v1\\scface\\local_audit.json"
+      }
+    },
+    "runtime": {
+      "stop_file": "F:\\FaceX-Zoo\\fine-tune\\data\\launches\\2efeb32faf864a1c8e3b25ac441c38d0\\stop.request",
+      "log_file": "F:\\FaceX-Zoo\\fine-tune\\data\\launches\\2efeb32faf864a1c8e3b25ac441c38d0\\console.log",
+      "result_file": "F:\\FaceX-Zoo\\fine-tune\\data\\launches\\2efeb32faf864a1c8e3b25ac441c38d0\\result.json"
+    }
+  },
+  "interpretation": "fine-tune/README.md; smoke is not formal training or FIQA evaluation"
+}

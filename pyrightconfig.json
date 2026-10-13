@@ -1,0 +1,25 @@
+{
+    "include": [
+      "src",
+      "scripts"
+    ],
+  
+    "exclude": [
+      "**/__pycache__",
+      "**/.git",
+      "**/.venv",
+      "**/venv",
+  
+      "datasets",
+      "data",
+  
+      "outputs",
+      "results",
+      "runs",
+      "logs",
+  
+      "checkpoints",
+      "weights",
+      "models"
+    ]
+  }

@@ -25,7 +25,7 @@ def test_deferred_meter_preserves_ordered_scalar_summation():
     assert not deferred.pending
 
 
-@pytest.mark.parametrize('head',['arcface','adaface','magface'])
+@pytest.mark.parametrize('head',['arcface','adaface','magface','cosface'])
 def test_deferred_sync_does_not_change_weights_history_or_recovery(cfg,tmp_path,head):
     threads=torch.get_num_threads()
     torch.set_num_threads(1)

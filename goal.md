@@ -1,6 +1,6 @@
 # FaceX-Zoo 연구 목표 및 작업 기준
 
-- 작성일: 2026-10-09 KST / 학습 구조·최적화 기준 갱신: 2026-10-11 KST
+- 작성일: 2026-10-09 KST / 학습 구조·최적화 기준 갱신: 2026-10-11 KST / CosFace 추가: 2026-10-13 KST
 - 작업 저장소: `F:\FaceX-Zoo`
 - 작업 브랜치: **`add-adaface`**
 - 현재 상태: **구현 및 검증 중**. 전체 학습 완료나 UCFace 수치 재현을 의미하지 않는다.
@@ -9,7 +9,7 @@
 
 ## 1. 최종 목표
 
-FaceX-Zoo를 공통 학습 기반으로 사용하고 공식 AdaFace head를 통합하여, **MobileFaceNet 1024D + ArcFace / AdaFace / MagFace**의 학습 완료 baseline 3종을 생성한다. VGGFace2를 사용하며, UCFace 논문 본문에서 확인할 수 있는 baseline 학습 조건을 최대한 맞춘다.
+FaceX-Zoo를 공통 학습 기반으로 사용하고 공식 AdaFace head를 통합하여, **MobileFaceNet 1024D + ArcFace / AdaFace / MagFace / CosFace**의 학습 완료 baseline 4종을 생성한다. VGGFace2를 사용하며, UCFace 논문 본문에서 확인할 수 있는 baseline 학습 조건을 최대한 맞춘다.
 
 학습 완료 checkpoint는 `C:\ronbun`에서 가중치를 고정한 특징 추출기로 사용한다. 고화질·저화질 평가 데이터와 원본·압축 임베딩에서 **Continuous FIQA 기반 사후 임계값 보정의 적용 전후 효과**를 평가하는 것이 최종 연구 목적이다.
 
@@ -50,7 +50,7 @@ FaceX-Zoo를 공통 학습 기반으로 사용하고 공식 AdaFace head를 통�
 | Backbone | MobileFaceNet | Table I의 비교 backbone |
 | 임베딩 차원 | **1024D** | IV-A-3: 주요 실험은 1024D. 이메일의 512D를 기본으로 채택하지 않음 |
 | 사전학습 데이터 | **VGGFace2** | 본문에 제시된 사전학습 데이터 중 이번 연구에서 선택. MS1MV3는 추가하지 않음 |
-| 후속 학습 classifier | ArcFace / AdaFace / MagFace | 학습된 backbone에 새 classifier를 연결하는 단계 구분 |
+| 후속 학습 classifier | ArcFace / AdaFace / MagFace / CosFace | 학습된 backbone에 새 classifier를 연결하는 단계 구분 |
 | Optimizer | Adam | IV-A-3 |
 | MobileFaceNet 학습률 | `1e-3` | IV-A-3 |
 | 학습률 감소 | 10 epoch마다 0.1배 | 40 epoch 실행에서 milestones `[10, 20, 30]`로 구성 |
@@ -58,6 +58,7 @@ FaceX-Zoo를 공통 학습 기반으로 사용하고 공식 AdaFace head를 통�
 | 학습 epoch | 40 | 논문 대응 baseline 학습 설정. 사전학습의 전체 세부 일정까지 동일하다고 단정하지 않음 |
 | Dropout 비율 | 0.6 | 비율은 본문 명시. 삽입 위치는 구현 선택으로 별도 기록 |
 | ArcFace, 저해상도 설정 | `m=0.6`, `s=64` | IV-A-2 |
+| CosFace, 저해상도 설정 | `m=0.3`, `s=64` | IV-A-2. 기존 `head/AM_Softmax.py` 재사용 |
 | AdaFace, 저해상도 설정 | `m=0.4`, `s=64`, `h=0.333` | IV-A-2 |
 | MagFace | `(l_a,u_a,l_m,u_m,lambda_g)=(10,110,0.45,0.8,20)` | IV-A-2. 추가 설정의 출처는 공식 구현과 구분 |
 | AdaFace EMA 계수 | `t_alpha=0.01` | 공식 구현 사용 예시에서 채택한 값. UCFace 본문에 명시된 값으로 표현하지 않음 |
@@ -88,7 +89,7 @@ FaceX-Zoo를 공통 학습 기반으로 사용하고 공식 AdaFace head를 통�
 - 원본 압축파일·메타데이터의 출처와 무결성을 확인하고, 이미지 수·identity 수·손상·누락을 집계한다.
 - Git clone, 압축파일 존재, 이미지 표본 읽기를 전체 데이터 검증 완료로 간주하지 않는다.
 - 실제 압축 내부 경로와 loader의 `data_root`·인덱스 경로가 일치해야 한다.
-- 세 모델은 같은 유효 이미지 목록, identity-label 매핑, 분할과 전처리를 사용한다.
+- 네 모델은 같은 유효 이미지 목록, identity-label 매핑, 분할과 전처리를 사용한다.
 - 누락·손상 이미지를 영벡터나 난수 이미지로 바꾸어 정식 학습하지 않는다. 검사 실패 시 중단하거나, 사전 정의된 제외 정책과 제외 목록을 기록한다.
 - 단순 resize와 landmark 기반 얼굴 정렬을 구분한다. 정렬을 구현하지 않았으면 `정렬 완료`라고 기록하지 않는다.
 - train/validation 역할을 명시한다. 같은 identity의 이미지 분할은 분류기 검증으로 사용할 수 있으나, 미관측 identity 평가라고 표현하지 않는다.
@@ -100,7 +101,7 @@ FaceX-Zoo를 공통 학습 기반으로 사용하고 공식 AdaFace head를 통�
 - `pretrain`, `finetune`, `export`의 입력·출력·설정·완료 상태를 각각 기록한다.
 - fine-tuning은 명시적으로 선택한 부모 checkpoint, 기대 SHA-256, 학습 완료 출처를 요구한다. hash 일치만으로 학습 완료를 판단하지 않는다.
 - 사전학습 loss와 데이터, 후속 학습 데이터·분할, backbone 업데이트 여부, classifier 초기화 정책을 실행 전에 고정한다.
-- **공통 MobileFaceNet 부모 1개를 VGGFace2로 사전학습하고, 그 backbone을 독립적으로 복사하여 대상 저해상도 데이터셋의 공식 training split에서 ArcFace / AdaFace / MagFace를 각각 fine-tuning한다.** backbone도 업데이트하고 classifier는 대상 training identity 수에 맞게 새로 무작위 초기화한다. head 간 순차 전달 학습을 하지 않는다.
+- **공통 MobileFaceNet 부모 1개를 VGGFace2로 사전학습하고, 그 backbone을 독립적으로 복사하여 대상 저해상도 데이터셋의 공식 training split에서 ArcFace / AdaFace / MagFace / CosFace를 각각 fine-tuning한다.** backbone도 업데이트하고 classifier는 대상 training identity 수에 맞게 새로 무작위 초기화한다. head 간 순차 전달 학습을 하지 않는다.
 - 02의 사전학습 loss는 ArcFace, 기본 일정은 40 epoch다. 이는 세부 사전학습 recipe가 공개되지 않아 채택한 구현 선택이며, 논문이 사전학습을 반드시 ArcFace로 40 epoch 하라고 명시한 것은 아니다. `PRETRAIN_EPOCHS`와 후속 학습의 논문 명시 40 epoch를 구분한다.
 - 03은 VGGFace2의 약 298만 장 목록을 다시 학습하지 않는다. 보충자료 II-A 및 Table IX의 대상 training split을 사용한다.
 
@@ -110,7 +111,7 @@ FaceX-Zoo를 공통 학습 기반으로 사용하고 공식 AdaFace head를 통�
 | QMUL-TinyFace | 2,570 | 7,804 | F 드라이브 공식 원본에서 검증·연결 |
 | SCFace | 50 | 800 | 미확보: 학습 비활성화·선택 차단 |
 
-- 현재 기본 계획: 사전학습 부모 **1개**, **TinyFace·SurvFace × 3 head × 5 seed = 30개**, export 30개. SCFace는 확보·검증 후 명시적으로 활성화하기 전까지 제외한다. 모델 수와 epoch 수는 데이터 규모가 달라 직접 시간으로 환산하지 않는다.
+- 현재 기본 계획: 사전학습 부모 **1개**, **TinyFace·SurvFace × 4 head × 5 seed = 40개**, export 40개. SCFace는 확보·검증 후 명시적으로 활성화하기 전까지 제외한다. 모델 수와 epoch 수는 데이터 규모가 달라 직접 시간으로 환산하지 않는다.
 - 입력은 `F:/FaceX-Zoo/tinyface`와 `F:/FaceX-Zoo/QMUL-SurvFace`를 사용한다. 공식 MAT membership·원래 신원·전체 decode·SHA-256을 검증하고 `fine-tune/data/protocols/local_qmul_v1/`에 목록·audit를 기록한다. 원본 파일과 split은 수정하지 않으며 기존 C 경로 protocol은 보존한다.
 - 각 대상의 train/evaluation 목록, 원래 identity, 클래스·이미지 수와 hash를 확인한다. remapped evaluation label을 train identity와 직접 비교하지 않는다. test는 FR 학습·checkpoint 선택에 사용하지 않는다.
 - SurvFace의 신원 번호가 있는 평가 파일은 training identity와 겹치지 않음을 검사한다. `unmated_probe/distractors_*`는 파일에서 신원을 복원할 수 없으므로 공식 분할의 분리 조건에 의존한다고 기록하며 독립적인 신원 검증 완료로 표현하지 않는다.
@@ -157,7 +158,7 @@ FaceX-Zoo를 공통 학습 기반으로 사용하고 공식 AdaFace head를 통�
 - 정식 학습은 CUDA를 실제 확인하고 장치 이름·runtime을 기록한다. CUDA 실패 시 조용히 CPU로 전환하지 않는다.
 - 작은 forward/backward 시험 후 **1024D·실제 클래스 수·batch 64**에서 메모리와 처리량을 검증한다. batch 4·클래스 8의 통과를 전체 조건의 메모리 검증으로 대체하지 않는다.
 - OOM 때문에 batch size, AMP, accumulation을 바꾸면 설정과 변경 이유를 기록한다. accumulation은 BatchNorm·AdaFace 통계까지 큰 batch와 동일하게 만들지 않는다.
-- 단일 GPU에서 세 모델은 순차 실행을 기본으로 한다. 전체 epoch·반복 소요 시간은 실제 처리량으로 추정한다.
+- 단일 GPU에서 네 모델은 순차 실행을 기본으로 한다. 전체 epoch·반복 소요 시간은 실제 처리량으로 추정한다.
 - 이미지 해제·decode·hash·정렬은 GPU 학습과 별도 병목이므로 단계별 시간을 기록한다.
 
 ### 실행 최적화 계약
@@ -227,12 +228,14 @@ FaceX-Zoo 내부에서 같은 클래스를 두 번 생성하여 비교한 것은
 
 2026-10-11 로컬 TinyFace169,403개·SurvFace473,392개 JPEG의 전체 decode/hash와 공식 MAT 참조를 검증하고 F 드라이브의 두 공식 training split을 연결했다. SCFace는 미확보로 실행을 제한한다. 기본 후속 모델은 두 대상 × 세 head × 다섯 seed =30개다. 검증100 tests/새 커널 계획5개와 데이터 수량 충돌·FIQA 용량/독립성 검토는 `fine-tune/reports/local_qmul_integrity_and_fiqa_20261011_v1.md` 및 JSON을 따른다. 정식 모델 학습과 FIQA는 이번 데이터 연결 작업에서 실행하지 않았다.
 
+2026-10-13 CosFace를 네 번째 후속 baseline으로 추가한다. 공통 ArcFace 부모 1개를 그대로 공유하며 후속 계획은 40개다. `head/AM_Softmax.py`를 변경 없이 재사용하고 저해상도 `margin=0.3`, `scale=64`를 적용한다. checkpoint의 공개 head 이름은 `cosface`, 구현 클래스는 `AM_Softmax`이며 margin도 출처·재개·export 검증에 포함한다. 실행 중인 02 및 00 노트북, 저장된 공통 설정, trainer·backbone·기존 head 구현과 학습 launch는 이번 작업에서 변경하지 않는다. 03/04 첫 셀에서 네 head와 CosFace 값을 명시해 과거 00의 세-head 목록보다 우선한다. 현재 02 커널은 재시작하지 않으며 부모 완료 후 03/04를 새 커널에서 시작한다. 이번 변경으로 02를 재학습할 필요는 없다. 아래 초기 준비 순서는 신규 캠페인에만 해당한다.
+
 다음 실행 순서:
 
 1. 커널 재시작 후 00 첫 셀의 변수·새 출력 root를 확인하고 저장한다.
 2. 01에서 기존 VGGFace2 추출·목록을 확인한다. 이미 완료된 추출은 다시 실행하지 않는다.
 3. 02에서 짧은 worker 처리량을 확인하거나 공통 부모 1개를 정식 학습한다.
-4. 03에서 대상 프로필을 확인하고 공식 split 검증 후 세 head·5 seed를 학습한다.
+4. 03에서 대상 프로필을 확인하고 공식 split 검증 후 네 head·5 seed를 학습한다.
 5. 04에서 같은 행렬의 완료 checkpoint를 export한다.
 6. ronbun의 1024D loader·전처리와 새로운 calibration 분리 계약을 검증한 뒤 Continuous FIQA 실험을 진행한다.
 
@@ -242,7 +245,7 @@ FaceX-Zoo 내부에서 같은 클래스를 두 번 생성하여 비교한 것은
 - [ ] 노트북·실행 안내가 `fine-tune/`에 모여 있고 새 커널 순차 실행이 가능하다.
 - [ ] 기본 seed `8972` 및 반복 seed 정책이 설정·코드·문서·manifest에 일치한다.
 - [ ] 데이터 출처·실제 이미지·전처리·분할·제외 목록을 검증했다.
-- [ ] 세 head의 출력·gradient와 공식 AdaFace 통합을 검증했다.
+- [ ] 네 head의 출력·gradient와 공식 AdaFace 통합을 검증했다.
 - [ ] 정식 학습이 누락 입력·잘못된 부모·CUDA 실패를 숨기지 않는다.
 - [ ] checkpoint 재개가 실제 optimizer·scheduler·RNG·EMA·epoch를 복구한다.
 - [ ] 선언된 학습 행렬의 모델·seed별 완료 checkpoint와 출처가 존재한다.

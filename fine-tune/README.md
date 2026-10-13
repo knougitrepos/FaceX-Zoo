@@ -9,17 +9,25 @@
 1. `00_environment_and_data.ipynb`: 첫 셀에서 공통 변수를 지정하고 설정 저장 셀까지 실행한다. 공통값은 `fine-tune/data/notebook_settings.json`에 저장된다. 뒤 노트북에서 공통값을 바꾸려면 00을 다시 저장하거나 해당 노트북의 변수로 덮어쓴다. 개별 노트북 변경은 다른 단계에 자동 전파하지 않는다.
 2. `01_prepare_vggface2.ipynb`: `EXECUTE=False`로 경로를 확인한 후 `True`로 실행한다. `EXTRACT_TRAIN_ARCHIVE=True`이면 로컬 train 압축파일을 raw_root/train 아래에 해제한 뒤 목록을 생성한다. 최초 실행은 오래 걸릴 수 있으며 약 10초마다 진행 상황을 표시한다. 중단 후 재실행은 gzip을 처음부터 읽으며 기존 파일의 바이트를 비교하고 누락 파일만 추가한다. 다른 내용의 기존 파일은 덮어쓰지 않는다. 압축 해제를 완료했다면 `EXTRACT_TRAIN_ARCHIVE=False`로 건너뛸 수 있다. 기존 목록과 내용이 다르면 덮어쓰지 않고 중단한다. 분할을 바꾸려면 새 train/val 목록 경로를 사용한다.
 3. `02_pretrain.ipynb`: `PARENT_SEED=8972`로 VGGFace2 공통 ArcFace 부모 **1개**를 학습한다. `EXECUTE=True`, `RUN_SMOKE_TEST=False`, `RUN_BENCHMARK=False`가 정식 학습이다. `RUN_BENCHMARK=True`면 worker 처리량만 측정하고 학습 가중치를 만들지 않는다.
-4. `03_finetune.ipynb`: F 드라이브의 TinyFace·SurvFace를 전체 decode/파일 SHA-256/MAT 이름·신원으로 검증하고 공식 training manifest를 만든 뒤, 동일 부모를 독립 복사하여 대상 데이터셋 × seed × ArcFace/AdaFace/MagFace를 순차 학습한다. 새 classifier를 대상 identity 수로 초기화하며 backbone도 업데이트한다. FR 학습 split에서 FIQA fit을 따로 떼지 않는다. VGGFace2 재학습 또는 Arc→Ada→Mag 연쇄 학습이 아니다.
+4. `03_finetune.ipynb`: F 드라이브의 TinyFace·SurvFace를 전체 decode/파일 SHA-256/MAT 이름·신원으로 검증하고 공식 training manifest를 만든 뒤, 동일 부모를 독립 복사하여 대상 데이터셋 × seed × ArcFace/AdaFace/MagFace/CosFace를 순차 학습한다. 새 classifier를 대상 identity 수로 초기화하며 backbone도 업데이트한다. FR 학습 split에서 FIQA fit을 따로 떼지 않는다. VGGFace2 재학습 또는 Arc→Ada→Mag 연쇄 학습이 아니다.
 5. `04_export_and_validate.ipynb`: 같은 데이터셋 × head × seed 목록을 순차 export한다. 학습 당시 전처리·학습 설정·분할·출처 hash를 함께 기록하며 설정 불일치는 거부한다.
 
-01~04의 초기값 `EXECUTE=False`는 계획 모드다. 단순 Run All로 장기 학습이나 export를 시작하지 않는다. 실제 실행하려면 해당 첫 셀에서 True로 바꾸고 순서대로 실행한다. Python 모듈 수정 후에는 반드시 커널을 재시작한다.
+01~04의 초기값 `EXECUTE=False`는 계획 모드다. 단순 Run All로 장기 학습이나 export를 시작하지 않는다. 실제 실행하려면 해당 첫 셀에서 True로 바꾸고 순서대로 실행한다. 수정된 Python 모듈을 쓰는 다음 단계는 새 커널에서 실행한다. 실행 중인 02 커널은 재시작하지 않고 완료까지 유지한다.
+
+## CosFace 추가 후 실행 (2026-10-13)
+
+- 현재 02는 기존 ArcFace 공통 부모 하나를 계속 학습한다. 00·02 노트북, 저장된 `notebook_settings.json`, 실행 중 request, trainer·backbone·기존 head 계산은 이 변경의 대상이 아니다.
+- 02 완료 후 **03을 별도 새 커널**에서 열고 첫 셀부터 실행한다. `HEADS`는 네 head를 명시하므로 과거 00에 저장된 세-head 목록을 덮어쓴다. 이번 추가만을 위해 00/01/02를 재실행할 필요는 없다. 기본 `EXECUTE=False`에서 40개 계획을 먼저 확인한다.
+- `HEAD_PARAMETERS["cosface"].update(type="CosFace", margin=0.3, scale=64.0)`가 노트북에 노출된다. 논문 IV-A-2의 저해상도 값이며 정식 03은 다른 margin/scale을 거부한다. 클래스 수는 TinyFace 2570, SurvFace 5319로 각 profile에서 설정한다.
+- 04도 새 커널에서 03과 같은 네 head·seed·데이터셋·부모·출력 root로 실행한다. 04는 재학습하지 않는다. 기존 세 head를 이미 완료했다면 두 노트북의 `HEADS=["cosface"]`로 CosFace만 추가할 수 있다. 기존 완료 모델은 보존된다.
+- CosFace 계산은 기존 `head/AM_Softmax.py`의 additive cosine margin을 사용한다. run/파일명/metadata의 head는 `cosface`, `source_config.head.type`은 실제 클래스 `AM_Softmax`다. `margin`과 `scale`을 checkpoint 설정에 기록하여 다른 설정의 재개·export를 거부한다. 별도의 CosFace 부모 학습은 없다.
 
 ## 주요 사용자 변수
 
 | 변수 | 기본/역할 | 주의점 |
 | --- | --- | --- |
 | `SEEDS` | `[8972,8973,8974,8975,8976]` | 실제 반복 실행한다. 한 seed만 필요하면 `[8972]`. 다음 단계도 같은 seed 목록을 사용한다. |
-| `HEADS` | 세 head 모두 | 03/04에서 실제 반복한다. 02는 공통 ArcFace 부모만 생성한다. |
+| `HEADS` | `["arcface", "adaface", "magface", "cosface"]` | 03/04에서 실제 반복한다. 02는 공통 ArcFace 부모만 생성한다. |
 | `KEEP_RAW_RESULTS` | `True` | 현재 노트북에서 변경하면 Trainer에 전달된다. False는 이번 run의 이전 중간 periodic checkpoint를 정리한다. 입력 이미지·부모 가중치 삭제 옵션이 아니다. |
 | `NUM_WORKERS` | `4` (실측 권장) | 학습은 별도 Python 프로세스에서 실행하여 Windows spawn을 지원한다. 새 후속 batch 구간에서 2 worker의 입력 대기를 확인하고 4를 선택했다. 01의 노트북 내 표본 확인 loader는 0을 유지한다. |
 | `PREFETCH_FACTOR` / `PERSISTENT_WORKERS` | `4` / `True` | worker별 미리 준비할 batch 수·epoch 간 worker 유지. RAM 부족 시 worker/prefetch를 줄인다. |
@@ -32,7 +40,7 @@
 | `AUDIT_WORKERS` | `4` (03/04) | CPU 이미지 decode worker 수. 최초 검사 후 audit hash/source snapshot을 확인하여 재사용한다. 이 값은 학습 NUM_WORKERS와 별개다. |
 | `DATASET` | 입력 root, train/val 목록, 크기, mean/std, 클래스 수 | 실제 loader에 전달된다. 현재 MobileFaceNet/export는 112×112만 지원하므로 다른 크기는 명시적으로 차단한다. 값이 조용히 무시되지 않는다. |
 | `TRAINING` | Adam, lr=0.001, 40 epoch, batch=64 등 | 논문 대응 조건을 유지한다. 변경하면 별도 실험이며 기존 checkpoint 재개 검증에서 거부될 수 있다. |
-| `BACKBONE` / `HEAD_PARAMETERS` | 차원, dropout, 세 head의 파라미터 | 00 첫 셀에 실제 값이 보인다. 본문 미명시 설정은 본 연구 선택이다. |
+| `BACKBONE` / `HEAD_PARAMETERS` | 차원, dropout, 네 head의 파라미터 | CosFace는 03/04 첫 셀의 `margin=0.3`, `scale=64`가 우선한다. 나머지는 00 저장값을 이어받는다. 본문 미명시 설정은 본 연구 선택이다. |
 | `PATHS` | checkpoint/export/report 위치 | F 드라이브 기본. 다른 실험 조건은 새 checkpoint/export root를 사용한다. |
 | `RUN_SMOKE_TEST` | `False` | 02/03에서 True면 더미 입력 forward/backward/optimizer 1 step만 실행한다. 정식 checkpoint는 생성하지 않는다. |
 | `RESUME_CHECKPOINTS` | `{}` | run ID → 중단 checkpoint 경로. 예: `{"finetune_survface_adaface_seed8972": "F:/.../recovery_....pt"}`. progress.json의 last_checkpoint를 확인해서 지정한다. 자동 최신 선택은 없다. |
@@ -40,7 +48,7 @@
 | `EXTRACT_TRAIN_ARCHIVE` | `True` (01만) | `EXECUTE=True`와 함께 설정하면 로컬 train archive를 해제한다. 원본 archive와 test archive는 보존한다. 얼굴 정렬/리사이즈 단계가 아니다. |
 | `VAL_EVERY` | `20` (01만) | 20번째마다 validation으로 분리하는 기존 정책. 이미지 단위 분할이며 신원 분리 평가가 아니다. |
 
-기본 계획은 부모 **1개**, TinyFace 15개 + SurvFace 15개 = 후속 모델 **30개**, export 30개다. SCFace는 아직 선택할 수 없다. 모든 후속 run이 같은 부모 hash를 공유한다. 논문의 5회 반복과 정확한 부모 공유 절차는 구분하며 부모 공유·seed 값은 사용자 선택이다. 변경 후 00을 다시 저장해야 기존 JSON의 SurvFace 전용/C 경로 설정을 새 F 경로로 바꿀 수 있다.
+기본 계획은 부모 **1개**, TinyFace 20개 + SurvFace 20개 = 후속 모델 **40개**, export 40개다. SCFace는 아직 선택할 수 없다. 모든 후속 run이 같은 부모 hash를 공유한다. 논문의 5회 반복과 정확한 부모 공유 절차는 구분하며 부모 공유·seed 값은 사용자 선택이다. 변경 후 00을 다시 저장해야 기존 JSON의 SurvFace 전용/C 경로 설정을 새 F 경로로 바꿀 수 있다.
 
 ## 재개·저장·실패 처리
 
@@ -95,6 +103,8 @@ TinyFace의 공식 평가는 mated probe + distractor gallery의 ranking이며 n
 - [PyTorch Windows FAQ](https://docs.pytorch.org/docs/2.7/notes/windows.html)
 
 ## 검증 명령
+
+CosFace 추가와 기존 02 보존·CPU 재개/export 검증은 [CosFace 통합 검증 기록](reports/cosface_integration_20261013_v1.md)을 따른다. 해당 기록은 정식 CosFace 모델 학습 완료를 뜻하지 않는다.
 
 SCFace 확보 후 별도 실행을 위한 사용자 변수와 manifest 준비 절차는 [scface_instruction.md](scface_instruction.md)를 따른다. 현재 기본 학습 대상은 TinyFace·SurvFace이며 SCFace는 준비·검증 후 명시적으로 활성화한다.
 

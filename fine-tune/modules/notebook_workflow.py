@@ -32,7 +32,7 @@ from .model_builder import build_model
 from .trainer import Trainer, set_seed, TrainingStopped
 from .finetune_protocol import default_profiles, verify_protocol
 
-HEAD_NAMES = ("arcface", "adaface", "magface")
+HEAD_NAMES = ("arcface", "adaface", "magface", "cosface")
 
 
 def merge_settings(base, overrides):
@@ -288,6 +288,7 @@ def validate_paper_parameters(cfg):
     if cfg["backbone"]["feat_dim"] != 1024 or cfg["backbone"]["dropout_rate"] != 0.6:
         raise ValueError("Main-paper MobileFaceNet baseline requires 1024D/dropout 0.6")
     expected = {"arcface": {"margin_arc": 0.6, "scale": 64.0},
+                "cosface": {"margin": 0.3, "scale": 64.0},
                 "adaface": {"m": 0.4, "h": 0.333, "scale": 64.0},
                 "magface": {"l_a": 10.0, "u_a": 110.0, "l_margin": 0.45, "u_margin": 0.8, "lamda": 20.0}}
     for head in cfg["campaign"]["heads"]:

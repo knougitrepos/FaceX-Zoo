@@ -89,7 +89,7 @@ def test_scface_remains_disabled():
     from modules.notebook_workflow import resolve_settings,merge_settings,plan_matrix
     settings=resolve_settings(root)
     assert len(plan_matrix(settings,'pretrain'))==1
-    assert len(plan_matrix(settings,'finetune'))==30
+    assert len(plan_matrix(settings,'finetune'))==40
     assert set(row['dataset'] for row in plan_matrix(settings,'export'))=={'tinyface','survface'}
     with pytest.raises(ValueError,match='disabled'):
         plan_matrix(merge_settings(settings,{'campaign':{'finetune_datasets':['scface']}}),'finetune')

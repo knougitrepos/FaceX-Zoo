@@ -316,6 +316,8 @@ def extract_model_config(model: nn.Module) -> Dict[str, Any]:
             head_dict["margin_arc"] = round(float(head.margin_arc), 4)
         if hasattr(head, "margin_am"):
             head_dict["margin_am"] = round(float(head.margin_am), 4)
+        if hasattr(head, "margin"):
+            head_dict["margin"] = round(float(head.margin), 4)
         if hasattr(head, "scale"):
             head_dict["scale"] = round(float(head.scale), 4)
         elif hasattr(head, "s"):
@@ -646,7 +648,7 @@ def compare_configs(
     ckpt_hd = ckpt_cfg.get("head", {})
     curr_hd = current_cfg.get("head", {})
     head_keys = [
-        "type", "feat_dim", "num_class", "margin_arc", "margin_am", "scale",
+        "type", "feat_dim", "num_class", "margin_arc", "margin_am", "margin", "scale",
         "m", "h", "t_alpha", "l_a", "u_a", "l_margin", "u_margin", "lamda"
     ]
     for key in head_keys:
