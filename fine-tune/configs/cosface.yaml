@@ -1,0 +1,13 @@
+# CosFace baseline: UCFace IV-A-2, PDF p.6 / printed p.7181.
+# Reuse upstream head/AM_Softmax.py unchanged; override its m=0.35/s=32 defaults.
+# Notebook HEAD_PARAMETERS has priority over these fallback values.
+head:
+  type: "CosFace"
+  feat_dim: 1024
+  num_class: 8631  # Replaced by the selected fine-tuning profile's identity count.
+  margin: 0.3
+  scale: 64.0
+
+experiment:
+  model_name: "MobileFaceNet_1024D_CosFace"
+  description: "CosFace low-resolution fine-tuning from the shared VGGFace2 parent; FaceX-Zoo AM_Softmax implementation"

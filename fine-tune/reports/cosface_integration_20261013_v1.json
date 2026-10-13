@@ -1,0 +1,147 @@
+{
+  "date_kst": "2026-10-13",
+  "repository": "F:/FaceX-Zoo",
+  "branch": "add-adaface",
+  "base_commit": "6e86b1caaf6c0fefe05df9178889b3a68e7d9263",
+  "scope": "Add CosFace to low-resolution fine-tuning and export; preserve running ArcFace pretraining",
+  "heads": [
+    "arcface",
+    "adaface",
+    "magface",
+    "cosface"
+  ],
+  "cosface": {
+    "implementation": "head/AM_Softmax.py",
+    "source": "UCFace IV-A-2 PDF page 6 / printed page 7181",
+    "margin": 0.3,
+    "scale": 64
+  },
+  "matrix": {
+    "parent": 1,
+    "datasets": [
+      "tinyface",
+      "survface"
+    ],
+    "seeds": [
+      8972,
+      8973,
+      8974,
+      8975,
+      8976
+    ],
+    "finetunes": 40,
+    "exports": 40,
+    "scface_enabled": false
+  },
+  "validation": {
+    "unique_tests_passed": 98,
+    "commands_passed": [
+      {
+        "suite": "CosFace, notebook workflow, optimized workflow, deferred loss, local datasets",
+        "passed": 38,
+        "seconds": 94.82
+      },
+      {
+        "suite": "environment check, audit fixes, pipeline, common heads, AdaFace",
+        "passed": 61,
+        "seconds": 19.81
+      }
+    ],
+    "duplicate_test": "test_environment_never_claims_unchecked_integrity",
+    "cuda_visible_devices": "-1",
+    "initial_attempt": "37 passed, 1 environment-check failure (Invalid device id) with empty CUDA visibility; rerun using -1 passed without production environment-code changes",
+    "formal_cosface_training": "not_executed",
+    "cosface_cuda_smoke": "not_executed",
+    "fiqa": "not_executed",
+    "notebooks": "03/04 full planned code-cell execution against temporary legacy settings; 40 rows each; launch/audit forbidden in test",
+    "shared_parent": "A parent created with legacy three-head configuration successfully feeds four-head fine-tuning/export in temporary CPU test"
+  },
+  "preservation": {
+    "before": {
+      "arcface": {
+        "weights_sha256": "a791cca5ada4751341b72f0be07392bebcf36811aaf1cbbe0abaf4483fd295a3",
+        "config_hash": "45138f87f2160968e5b30c272fbbcc678960a0810bf77f6ac7bc2cbe681f4e1d"
+      },
+      "adaface": {
+        "weights_sha256": "0f051e158645783b201568e01f111921b12612d65f1ce738725e65d07512aa6f",
+        "config_hash": "7d36bc44a3fea31da3a70129dec2c1d65bf91299e285c5434dbbdafa1a3976ba"
+      },
+      "magface": {
+        "weights_sha256": "a791cca5ada4751341b72f0be07392bebcf36811aaf1cbbe0abaf4483fd295a3",
+        "config_hash": "e383e0dabef7646d3b93ae1923341a5b17b31a564b1b638ffa466c8c0a2963ef"
+      },
+      "preserved_files": {
+        "fine-tune/notebooks/00_environment_and_data.ipynb": "09dab5971a8eb9534efe25ebc543d53ff7925f0a61ac852c2046a0f2f3d28805",
+        "fine-tune/notebooks/02_pretrain.ipynb": "3e3314f0e2450e1e569103f5c26b533772dfb8266249b27457c15773639d1740",
+        "fine-tune/data/notebook_settings.json": "6f76f7e2147cf9d700c31f6196d00f0e94de3a801eeddedd3699243b76e5843e",
+        "fine-tune/data/launches/49334cf572834726a1516a4fb05b27fd/request.json": "b4f0952012af90ae6e16002612a4008e3bdc3b0c37f8cf8c20f67b5643e7ef18",
+        "fine-tune/modules/trainer.py": "5019f23500f3cce9ccfcb3e4ca10ab7804c8d50e50f26bf90017f8d55dcf08ea",
+        "fine-tune/modules/dataset.py": "34c7cb723d6b934fcb61348966208a14806d95cf63fd3548e8fc469c8ee762e1",
+        "fine-tune/scripts/run_campaign.py": "3d4a6d30fd5672a81e7cd366485d34ef6b74694884a7e8a91614151606ca11b4",
+        "fine-tune/modules/process_runner.py": "3002c7d220318974c320cce5be9d73a8926b2b5a470a66719b2ecac3fb153008",
+        "backbone/MobileFaceNets.py": "3691d5c90f8f23c1f02d0e8e5d8add37b88f21b1a2558b3d7d6b9ea382a74593",
+        "head/AM_Softmax.py": "c7143ab0f1500f468a064671bd95fec1d7149c86f3077074a2bd1a7d4ad56bc5",
+        "fine-tune/configs/common.yaml": "10a014e90919d6c0cc61680666e357f3f0829d239408aedb7bd8092a26c47e8b",
+        "fine-tune/configs/arcface.yaml": "0e81e27123bc93e6ceb6175fc273ac72adda06fe5823dec2be415b023523c9ce",
+        "fine-tune/configs/adaface.yaml": "611eca45bdbe31ef39626930a634acab169eb02931b24b83247ce3fb6b1925cd",
+        "fine-tune/configs/magface.yaml": "b8073ca0e5746c58597cfaf76959c451f87174e3700cf1f3efb26421235504d4"
+      },
+      "pretrain_plan": [
+        {
+          "stage": "pretrain",
+          "head": "arcface",
+          "seed": 8972,
+          "run_id": "pretrain_arcface_seed8972"
+        }
+      ]
+    },
+    "after": {
+      "arcface": {
+        "weights_sha256": "a791cca5ada4751341b72f0be07392bebcf36811aaf1cbbe0abaf4483fd295a3",
+        "config_hash": "45138f87f2160968e5b30c272fbbcc678960a0810bf77f6ac7bc2cbe681f4e1d"
+      },
+      "adaface": {
+        "weights_sha256": "0f051e158645783b201568e01f111921b12612d65f1ce738725e65d07512aa6f",
+        "config_hash": "7d36bc44a3fea31da3a70129dec2c1d65bf91299e285c5434dbbdafa1a3976ba"
+      },
+      "magface": {
+        "weights_sha256": "a791cca5ada4751341b72f0be07392bebcf36811aaf1cbbe0abaf4483fd295a3",
+        "config_hash": "e383e0dabef7646d3b93ae1923341a5b17b31a564b1b638ffa466c8c0a2963ef"
+      },
+      "preserved_files": {
+        "fine-tune/notebooks/00_environment_and_data.ipynb": "09dab5971a8eb9534efe25ebc543d53ff7925f0a61ac852c2046a0f2f3d28805",
+        "fine-tune/notebooks/02_pretrain.ipynb": "3e3314f0e2450e1e569103f5c26b533772dfb8266249b27457c15773639d1740",
+        "fine-tune/data/notebook_settings.json": "6f76f7e2147cf9d700c31f6196d00f0e94de3a801eeddedd3699243b76e5843e",
+        "fine-tune/data/launches/49334cf572834726a1516a4fb05b27fd/request.json": "b4f0952012af90ae6e16002612a4008e3bdc3b0c37f8cf8c20f67b5643e7ef18",
+        "fine-tune/modules/trainer.py": "5019f23500f3cce9ccfcb3e4ca10ab7804c8d50e50f26bf90017f8d55dcf08ea",
+        "fine-tune/modules/dataset.py": "34c7cb723d6b934fcb61348966208a14806d95cf63fd3548e8fc469c8ee762e1",
+        "fine-tune/scripts/run_campaign.py": "3d4a6d30fd5672a81e7cd366485d34ef6b74694884a7e8a91614151606ca11b4",
+        "fine-tune/modules/process_runner.py": "3002c7d220318974c320cce5be9d73a8926b2b5a470a66719b2ecac3fb153008",
+        "backbone/MobileFaceNets.py": "3691d5c90f8f23c1f02d0e8e5d8add37b88f21b1a2558b3d7d6b9ea382a74593",
+        "head/AM_Softmax.py": "c7143ab0f1500f468a064671bd95fec1d7149c86f3077074a2bd1a7d4ad56bc5",
+        "fine-tune/configs/common.yaml": "10a014e90919d6c0cc61680666e357f3f0829d239408aedb7bd8092a26c47e8b",
+        "fine-tune/configs/arcface.yaml": "0e81e27123bc93e6ceb6175fc273ac72adda06fe5823dec2be415b023523c9ce",
+        "fine-tune/configs/adaface.yaml": "611eca45bdbe31ef39626930a634acab169eb02931b24b83247ce3fb6b1925cd",
+        "fine-tune/configs/magface.yaml": "b8073ca0e5746c58597cfaf76959c451f87174e3700cf1f3efb26421235504d4"
+      },
+      "pretrain_plan": [
+        {
+          "stage": "pretrain",
+          "head": "arcface",
+          "seed": 8972,
+          "run_id": "pretrain_arcface_seed8972"
+        }
+      ]
+    },
+    "all_equal": true,
+    "live_training_pid": 27156,
+    "last_observed": "2026-10-13 13:12:08 KST epoch36 step10221/46637, 536.4 images/sec, lock PID27156",
+    "checkpoint_compatibility": {
+      "path": "F:/FaceX-Zoo/fine-tune/checkpoints/shared_parent_v3/pretrain_arcface_seed8972/pretrain_mobilefacenet_1024d_recovery_e29_b562_266f36f0.pt",
+      "strict_backbone_head_load": true,
+      "scientific_config_differences": [],
+      "config_hash_equal": true,
+      "cpu_only": true
+    }
+  }
+}

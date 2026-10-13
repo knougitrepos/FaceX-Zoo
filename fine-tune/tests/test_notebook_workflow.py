@@ -127,10 +127,12 @@ def test_real_small_image_matrix_and_export(cfg, monkeypatch):
     old_threads = torch.get_num_threads()
     torch.set_num_threads(1)
     try:
-        parents = flow.run_training_matrix(cfg, "pretrain")
+        legacy_parent_cfg = flow.merge_settings(cfg, {"campaign": {"heads": ["arcface", "adaface", "magface"]}})
+        legacy_parent_cfg["heads"].pop("cosface")
+        parents = flow.run_training_matrix(legacy_parent_cfg, "pretrain")
         assert len(parents) == 1 and all(r["completed"] for r in parents)
         runs = flow.run_training_matrix(cfg, "finetune")
-        assert len(runs) == 6 and all(r["completed"] for r in runs)
+        assert len(runs) == 8 and all(r["completed"] for r in runs)
         assert len({load_checkpoint(r["checkpoint"])["parent_hash"] for r in runs}) == 1
         assert len({load_checkpoint(r["checkpoint"])["seed"] for r in runs}) == 2
         for row in runs:
@@ -141,12 +143,20 @@ def test_real_small_image_matrix_and_export(cfg, monkeypatch):
         assert all(r["status"] == "reused_completed" for r in again)
         assert [r["sha256"] for r in again] == [r["sha256"] for r in runs]
         exports = flow.export_matrix(cfg)
-        assert len(exports) == 6 and all(r["completed"] for r in exports)
+        assert len(exports) == 8 and all(r["completed"] for r in exports)
         assert all(r["status"] == "reused_completed" for r in flow.export_matrix(cfg))
         for out in exports:
             meta = json.loads(Path(out["export"]).with_name(Path(out["export"]).stem + "_meta.json").read_text())
             assert meta["preprocessing"]["pixel_std"] == 255
             assert meta["fiqa_evaluation"] == "not_executed"
+            if out["head"] == "cosface":
+                assert meta["source_config"]["head"]["type"] == "AM_Softmax"
+                assert meta["source_config"]["head"]["margin"] == 0.3
+                assert meta["source_config"]["head"]["scale"] == 64.0
+        changed_margin = flow.merge_settings(cfg, {"heads": {"cosface": {"margin": 0.35}}})
+        cosface_row = next(row for row in flow.plan_matrix(cfg, "export") if row["head"] == "cosface")
+        with pytest.raises(ValueError, match="Head margin mismatch"):
+            flow._export_one(changed_margin, cosface_row)
         changed = flow.merge_settings(cfg, {"dataset": {"pixel_std": 128.0}})
         with pytest.raises(ValueError):
             flow.run_training_matrix(changed, "finetune")
@@ -161,7 +171,7 @@ def test_campaign_failure_records_remaining_work(cfg, monkeypatch):
     with pytest.raises(RuntimeError, match="injected failure"):
         flow.run_training_matrix(cfg, "finetune")
     summary = json.loads(next(Path(cfg["paths"]["report_dir"]).glob("*.json")).read_text())
-    assert summary["completed"] == 0 and len(summary["not_started"]) == 5
+    assert summary["completed"] == 0 and len(summary["not_started"]) == 7
     assert summary["rows"][0]["status"] == "failed"
 
 

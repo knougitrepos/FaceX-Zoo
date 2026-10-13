@@ -27,14 +27,14 @@ FINETUNE_PROFILES["scface"].update(
 
 | 사용자 변수 | 설정 및 주의사항 |
 | --- | --- |
-| `HEADS` | `["arcface", "adaface", "magface"]` 유지 |
-| `SEEDS` | `[8972, 8973, 8974, 8975, 8976]` 유지 시 SCFace 모델 15개 |
+| `HEADS` | `["arcface", "adaface", "magface", "cosface"]` 유지 |
+| `SEEDS` | `[8972, 8973, 8974, 8975, 8976]` 유지 시 SCFace 모델 20개 |
 | `PARENT_CHECKPOINT`, `PARENT_SHA256` | 기존 공통 부모와 hash 유지. `None`이면 기존 `PATHS`와 `PARENT_SEED`가 지정하는 02 부모를 사용한다. |
 | `PATHS` | 기존 공통 부모를 사용할 때 checkpoint root를 임의 변경하지 않는다. SCFace 출력은 데이터셋 이름으로 자동 분리된다. |
 | `KEEP_RAW_RESULTS` | 상세 학습 산출물 보존 여부. 원본 데이터·공통 부모를 삭제하는 옵션이 아니다. |
 | `NUM_WORKERS` / `PREFETCH_FACTOR` | Windows 현재 권장 4 / 4. 별도 학습 프로세스로 실행하며 문제가 있으면 worker 0으로 진단한다. |
 
-클래스 수는 SCFace 프로필의 50으로 후속 학습 시 적용된다. VGGFace2용 `DATASET.num_classes`나 세 head의 사전학습 클래스 수를 SCFace 때문에 50으로 바꾸지 않는다. Backbone·학습 일정·head 파라미터는 기존 논문 대응 설정을 유지한다.
+클래스 수는 SCFace 프로필의 50으로 후속 학습 시 적용된다. VGGFace2용 `DATASET.num_classes`나 네 head의 기본 클래스 수를 SCFace 때문에 50으로 바꾸지 않는다. Backbone·학습 일정·head 파라미터는 기존 논문 대응 설정을 유지한다.
 
 ## 3. 실행 순서
 

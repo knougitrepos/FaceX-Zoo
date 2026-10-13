@@ -1,6 +1,6 @@
 """
 Unified Model Builder for Face Recognition Backbones and Margin Heads.
-Supports MobileFaceNet (1024D / 512D) paired with ArcFace, AdaFace, and MagFace.
+Supports MobileFaceNet (1024D / 512D) paired with ArcFace, AdaFace, MagFace, and CosFace.
 """
 
 import sys
@@ -20,6 +20,7 @@ from backbone.MobileFaceNets import MobileFaceNet
 from head.ArcFace import ArcFace
 from head.AdaFace import AdaFace
 from head.MagFace import MagFace
+from head.AM_Softmax import AM_Softmax
 
 logger = logging.getLogger("fine_tune.model")
 
@@ -29,8 +30,8 @@ class FaceRecognitionModel(nn.Module):
 
     Attributes:
         backbone (nn.Module): Feature extractor (e.g. MobileFaceNet).
-        head (nn.Module): Margin classifier (ArcFace, AdaFace, MagFace).
-        head_type (str): 'ArcFace', 'AdaFace', or 'MagFace'.
+        head (nn.Module): Margin classifier (ArcFace, AdaFace, MagFace, CosFace).
+        head_type (str): 'ArcFace', 'AdaFace', 'MagFace', or 'CosFace'.
     """
 
     def __init__(self, backbone: nn.Module, head: nn.Module, head_type: str):
@@ -121,6 +122,15 @@ def build_model(
             margin_am=margin_am,
             scale=scale,
         )
+    elif head_type.lower() == "cosface":
+        # FaceX-Zoo's existing additive cosine-margin implementation.
+        # UCFace IV-A-2 low-resolution baseline: m=0.3, s=64.
+        head = AM_Softmax(
+            feat_dim=feat_dim,
+            num_class=num_class,
+            margin=float(head_conf.get("margin", 0.3)),
+            scale=float(head_conf.get("scale", 64.0)),
+        )
     elif head_type.lower() == "adaface":
         m = float(head_conf.get("m", 0.4))
         h = float(head_conf.get("h", 0.333))
@@ -154,7 +164,7 @@ def build_model(
             lamda=lamda,
         )
     else:
-        logger.error(f"Unsupported head type: {head_type}. Supported: 'ArcFace', 'AdaFace', 'MagFace'")
+        logger.error(f"Unsupported head type: {head_type}. Supported: 'ArcFace', 'AdaFace', 'MagFace', 'CosFace'")
         raise ValueError(f"Unsupported head type: {head_type}")
 
     logger.info(
