@@ -1,25 +1,45 @@
 {
-    "include": [
-      "src",
-      "scripts"
-    ],
-  
-    "exclude": [
-      "**/__pycache__",
-      "**/.git",
-      "**/.venv",
-      "**/venv",
-  
-      "datasets",
-      "data",
-  
-      "outputs",
-      "results",
-      "runs",
-      "logs",
-  
-      "checkpoints",
-      "weights",
-      "models"
-    ]
-  }
+  "include": [
+    "backbone",
+    "head",
+    "utils",
+    "data_processor",
+    "training_mode",
+    "test_protocol",
+    "face_sdk",
+    "fine-tune"
+  ],
+
+  "extraPaths": [
+    ".",
+    "fine-tune"
+  ],
+
+  "exclude": [
+    "**/__pycache__",
+    "**/.git",
+    "**/.venv",
+    "**/venv",
+    "**/.pytest_cache",
+
+    "datasets",
+    "data",
+    "VGGFace2",
+    "QMUL-SurvFace",
+    "tinyface",
+
+    "outputs",
+    "results",
+    "runs",
+    "logs",
+
+    "checkpoints",
+    "weights",
+    "models",
+
+    "fine-tune/checkpoints",
+    "fine-tune/data",
+    "fine-tune/reports",
+    "addition_module"
+  ]
+}
