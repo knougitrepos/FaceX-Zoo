@@ -65,6 +65,15 @@
 - loss의 GPU→CPU 전송은 `LOSS_SYNC_BATCHES`로 묶되, Python scalar의 원래 순서·가중 합산을 유지한다. 로그/recovery/epoch 종료 전 flush하여 완료 batch의 기록을 빠뜨리지 않는다. 이 옵션과 worker/prefetch는 실행 설정에 기록하며 학습 hyperparameter를 변경하지 않는다.
 - `KEEP_RAW_RESULTS=False`에서도 최신 recovery·최종 모델·집계·출처는 남긴다. 현재 프로세스가 만든 이전 recovery는 간격마다 최신 파일로 교체하며 이 정책은 상세 결과 보존과 구분한다.
 
+## NaN/Inf 중단과 재개 (2026-10-16)
+
+- ArcFace는 `sqrt(1 - cos_theta**2)`의 입력에 해당 dtype의 machine epsilon 하한을 적용한다. 정확한 cosine 경계 ±1에서 발생하는 NaN gradient를 방지하며, 하한 밖의 계산은 기존 공식과 같다. backbone 구조·출력 차원·margin·scale은 바꾸지 않는다. 이는 논문 명시 설정이 아니라 구현의 수치 안정화 변경이다.
+- Trainer는 매 배치 loss를 backward 전에, 모든 optimizer gradient를 optimizer.step 전에 검사한다. gradient clipping/rescaling을 하지 않으며 NaN/Inf는 `NonFiniteTrainingError`로 중단한다. `progress.json`에는 실패 배치와 `optimizer_step_skipped=true`를 남긴다. forward가 BatchNorm/EMA를 바꿨을 수 있으므로 실패한 현재 상태를 recovery로 저장하지 않는다.
+- `LOSS_SYNC_BATCHES`는 기록용 loss 집계를 계속 제어하지만, 이상값 검사에는 매 배치 장치 동기화가 추가된다. 변경 후 전체 epoch 처리량은 아직 측정하지 않았다.
+- 새 checkpoint의 `extra_meta.training_numerics`와 `resume_source`는 적용 정책과 재개 파일 SHA-256을 기록한다. scientific config hash 검증을 완화하지 않으며, 기존 checkpoint는 수치 정책이 기록되지 않은 이전 코드 결과로 구분한다.
+- NaN 발생 후에는 파일 이름상 최신 checkpoint를 바로 재사용하지 않는다. 유한한 모델·optimizer 상태가 확인된 마지막 checkpoint를 명시하고, 이후 잘못된 산출물은 hash를 기록하여 격리한다. 기존 완료 모델과 입력 데이터는 변경하지 않는다.
+- 이번 `finetune_survface_arcface_seed8974` 복구 준비, 보관 위치, 정확한 재개 설정은 [수치 안정화·격리 기록](reports/numerical_safety_recovery_20261016_v1.md)을 따른다. 학습 재개는 사용자가 03 노트북에서 수행한다.
+
 ## 환경 확인과 결과 해석
 
 00은 CUDA 사용 가능 여부, 장치, branch, 파일 존재·크기와 메타데이터 identity 수를 표시한다. 파일 존재를 압축파일 전체 무결성 검증이라고 표시하지 않는다. `archive_integrity`와 `all_images_decode`는 실행하지 않았다면 `not_checked`다. 환경 점검은 정식 학습 완료를 의미하지 않는다.

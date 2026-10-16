@@ -9,6 +9,7 @@ import logging
 import random
 import json
 import uuid
+import hashlib
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -45,6 +46,19 @@ logger = logging.getLogger("fine_tune.trainer")
 
 class TrainingStopped(RuntimeError):
     """A requested stop after an optimizer step, with resumable state saved."""
+
+
+class NonFiniteTrainingError(RuntimeError):
+    """A non-finite loss or gradient blocked an optimizer update."""
+
+
+TRAINING_NUMERICS = {
+    "version": "20261016_nonfinite_guard_v1",
+    "arcface_sqrt_floor": "torch.finfo(cos_theta.dtype).eps",
+    "loss_check": "every_batch_before_backward",
+    "gradient_check": "every_batch_before_optimizer_step_inf_norm_no_clipping",
+    "on_nonfinite": "abort_without_saving_current_state",
+}
 
 
 def set_seed(seed: int = 8972):
@@ -175,6 +189,7 @@ class Trainer:
         self.last_periodic_ckpt: Optional[str] = None
         self.saved_checkpoints: Dict[str, str] = {}
         self.last_saved_ckpt: Optional[str] = None
+        self.resume_source = None
         self.resume_batch = 0
         self.resume_meter = None
         self._recovery_clock = time.monotonic()
@@ -206,6 +221,28 @@ class Trainer:
         temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(temp, self.progress_path)
 
+    def _numerical_provenance(self):
+        # Keep execution-policy metadata separate from the scientific config
+        # hash so verified pre-fix checkpoints remain explicitly resumable.
+        return {"training_numerics": dict(TRAINING_NUMERICS),
+                "resume_source": self.resume_source}
+
+    def _reject_nonfinite(self, component, epoch, batch_idx, total):
+        # Forward may already have changed BatchNorm/EMA buffers. Do not save
+        # this in-memory state as a recovery checkpoint, even for a finite loss.
+        self.optimizer.zero_grad(set_to_none=True)
+        message = (f"Non-finite {component} at epoch {epoch}, batch {batch_idx + 1}. "
+                   "Optimizer step blocked; current state was NOT saved. "
+                   f"Last saved checkpoint (validate before resume): {self.last_saved_ckpt}")
+        try:
+            self._progress("failed", completed=False, reason="nonfinite",
+                           invalid_component=component, failure_batch=batch_idx + 1,
+                           batches_completed=batch_idx, total_batches=total,
+                           optimizer_step_skipped=True, **self._numerical_provenance())
+        except Exception:
+            logger.exception("Could not write non-finite failure progress")
+        raise NonFiniteTrainingError(message)
+
     def _recovery(self, next_batch, meter):
         import copy
         filename = f"{self._model_prefix}_recovery_e{self.cur_epoch}_b{next_batch}_{uuid.uuid4().hex[:8]}.pt"
@@ -215,7 +252,7 @@ class Trainer:
                 "seed": self.seed, "stage": self.stage, "head": self.head_type,
                 "parent_hash": self.parent_hash, "config": self.train_config,
                 "history": copy.deepcopy(self.history), "total_epochs": self.total_epochs,
-                "execution_settings": self.config,
+                "execution_settings": self.config, **self._numerical_provenance(),
                 "epoch_state": {"epoch": self.cur_epoch, "next_batch": next_batch,
                                 "loss_sum": meter.sum, "loss_count": meter.count}})
         old = self._owned_recovery
@@ -260,7 +297,16 @@ class Trainer:
                     loss = self.criterion(logits, labels)
 
                 self.optimizer.zero_grad()
+                if not bool(torch.isfinite(loss).all()):
+                    self._reject_nonfinite("loss", epoch, batch_idx, total)
                 loss.backward()
+                # This reduction does not clip or rescale gradients. The inf
+                # norm also avoids overflow from squaring otherwise finite grads.
+                grads = [p.grad for group in self.optimizer.param_groups
+                         for p in group["params"] if p.grad is not None]
+                grad_norm = torch.nn.utils.get_total_norm(grads, norm_type=float("inf"))
+                if not bool(torch.isfinite(grad_norm)):
+                    self._reject_nonfinite("gradient", epoch, batch_idx, total)
                 self.optimizer.step()
 
                 loss_meter.update_tensor(loss, images.size(0))
@@ -365,6 +411,13 @@ class Trainer:
             strict_config=strict_config,
             allow_unverified_resume=allow_unverified_resume,
         )
+        with open(checkpoint_path, "rb") as source:
+            source_hash = hashlib.file_digest(source, "sha256").hexdigest()
+        self.last_saved_ckpt = str(Path(checkpoint_path).resolve())
+        self.resume_source = {
+            "checkpoint": self.last_saved_ckpt, "sha256": source_hash,
+            "source_training_numerics": meta.get("training_numerics"),
+        }
         # Restore accumulated history if available
         loaded_history = meta.get("history") if meta else None
         if loaded_history and isinstance(loaded_history, dict) and "epochs" in loaded_history and len(loaded_history["epochs"]) > 0:
@@ -446,6 +499,7 @@ class Trainer:
             "config": self.train_config,
             "config_hash": self.config_hash,
             "execution_settings": self.config,
+            **self._numerical_provenance(),
         }
         if extra_meta:
             meta.update(extra_meta)
@@ -489,6 +543,7 @@ class Trainer:
 
         self.cur_epoch = start_epoch
         logger.info(f"Starting training from epoch {start_epoch} to {self.total_epochs} (Seed: {self.seed}, Keep Raw: {self.keep_raw_results})...")
+        logger.info("Training numerical policy: %s", json.dumps(TRAINING_NUMERICS))
 
         try:
             for epoch in range(start_epoch, self.total_epochs + 1):
@@ -531,6 +586,7 @@ class Trainer:
                             "config": self.train_config,
                             "config_hash": self.config_hash,
                             "execution_settings": self.config,
+                            **self._numerical_provenance(),
                         },
                         allow_overwrite=False,
                     )

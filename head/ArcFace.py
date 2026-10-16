@@ -28,7 +28,12 @@ class ArcFace(Module):
         feats = F.normalize(feats)
         cos_theta = torch.mm(feats, kernel_norm) 
         cos_theta = cos_theta.clamp(-1, 1)
-        sin_theta = torch.sqrt(1.0 - torch.pow(cos_theta, 2))
+        # sqrt'(0) is infinite: even a masked non-target class at cos=+/-1
+        # can produce 0 * inf -> NaN during backward. Floor the radicand
+        # before sqrt; interior values retain the original ArcFace formula.
+        sin_theta = torch.sqrt(
+            (1.0 - torch.pow(cos_theta, 2)).clamp_min(torch.finfo(cos_theta.dtype).eps)
+        )
         cos_theta_m = cos_theta * self.cos_margin - sin_theta * self.sin_margin
         # 0 <= theta + m <= pi, ==> -m <= theta <= pi-m
         # because 0<=theta<=pi, so, we just have to keep theta <= pi-m, that is cos_theta >= cos(pi-m)

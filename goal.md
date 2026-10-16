@@ -127,6 +127,12 @@ FaceX-Zoo를 공통 학습 기반으로 사용하고 공식 AdaFace head를 통�
 - MagFace의 norm-dependent margin과 regularization을 보존하고 관련 gradient를 확인한다.
 - 공식 AdaFace의 라이선스·저작권 고지와 참조 commit을 보존한다.
 
+### 2026-10-16 수치 안정화 및 손상 run 복구
+
+ArcFace의 제곱근 입력을 dtype epsilon으로 제한하여 cosine 경계 ±1에서의 비유한 gradient를 방지한다. 모델 구조·1024D·margin·학습률·공식 split은 유지하며 이 변경은 논문 설정이 아닌 구현 안정화로 기록한다. Trainer는 매 배치 loss/gradient의 NaN·Inf를 optimizer 업데이트 전에 차단하며, 실패한 메모리 상태를 recovery로 저장하지 않는다. 적용 정책과 재개 checkpoint SHA-256은 checkpoint의 `extra_meta.training_numerics`/`resume_source`에 남긴다. 기존 scientific config 검증은 유지한다.
+
+SurvFace ArcFace seed8974는 epoch 11부터 비유한 상태가 확인되어 epoch 11~36, epoch 37 recovery 및 당시 progress를 별도 격리했다. epoch 1~10, 공통 부모, 다른 run은 보존한다. epoch 10에서 epoch 11로 재개하는 호환성은 검사했으나 실제 학습 재개·완료는 사용자가 수행한다. 검증과 경로는 `fine-tune/reports/numerical_safety_recovery_20261016_v1.md`를 따른다.
+
 ## 6. 코드·노트북·브랜치 운영
 
 - 모든 작업은 **`add-adaface` 브랜치**에서 한다. 기존 사용자 변경을 보존하고 main 등 다른 브랜치를 reset·덮어쓰지 않는다.
