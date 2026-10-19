@@ -260,3 +260,7 @@ FaceX-Zoo 내부에서 같은 클래스를 두 번 생성하여 비교한 것은
 - [ ] 원본 보존 옵션과 Git 추적 정책이 동작하고 기존 결과를 덮어쓰지 않는다.
 
 **코드 구현 완료, 테스트 통과, 정식 학습 완료, FIQA 실험 완료는 각각 별도로 판정한다.** 이 문서의 체크리스트는 목표이며 실행 증거 없이 완료로 표시하지 않는다.
+
+### 2026-10-18 MagFace 수치 경계 보정
+
+MagFace의 sqrt 입력에 dtype epsilon 하한을 적용한다. 모델 구조·논문 하이퍼파라미터·전처리는 변경하지 않으며, 원본과 달라진 경계 처리를 `training_numerics`에 명시한다. 이전 checkpoint의 수치 정책과 hash는 `resume_source`로 보존한다. 실제 SurvFace/MagFace/seed8975 epoch21 batch271 오류를 재현하고 수정본 300 batch 및 관련 테스트 39개를 검증했다. 이는 정식 후속 학습 완료가 아니다. 재개는 정상 epoch20 checkpoint에서 하며, 상세 근거와 설정은 [MagFace 수치 복구 보고서](fine-tune/reports/magface_numerical_recovery_20261018_v1.md)를 따른다.

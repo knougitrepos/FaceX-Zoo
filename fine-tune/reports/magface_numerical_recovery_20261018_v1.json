@@ -1,0 +1,59 @@
+{
+  "status": "passed_bounded_replay",
+  "production_training_completed": false,
+  "checkpoint": "F:\\FaceX-Zoo\\fine-tune\\checkpoints\\shared_parent_v3\\finetune_survface_magface_seed8975\\finetune_mobilefacenet_1024d_magface_epoch_20.pt",
+  "checkpoint_sha256": "7992b8d9d2317b5e1f630fdcefae85090836e7e218cc495ba0d8e3bd1368d204",
+  "epoch": 21,
+  "optimizer_steps_in_memory": 300,
+  "source_numerics": {
+    "version": "20261016_nonfinite_guard_v1",
+    "arcface_sqrt_floor": "torch.finfo(cos_theta.dtype).eps",
+    "loss_check": "every_batch_before_backward",
+    "gradient_check": "every_batch_before_optimizer_step_inf_norm_no_clipping",
+    "on_nonfinite": "abort_without_saving_current_state"
+  },
+  "applied_numerics": {
+    "version": "20261018_magface_sqrt_floor_v2",
+    "arcface_sqrt_floor": "torch.finfo(cos_theta.dtype).eps",
+    "magface_sqrt_floor": "torch.finfo(cos_theta.dtype).eps",
+    "loss_check": "every_batch_before_backward",
+    "gradient_check": "every_batch_before_optimizer_step_inf_norm_no_clipping",
+    "on_nonfinite": "abort_without_saving_current_state"
+  },
+  "torch_version": "2.7.1+cu118",
+  "device": "NVIDIA GeForce GTX 1080 Ti",
+  "original_head_source_sha256": "c6d7b0ebfdd238af90ee9faf6e4ed64cfa3bd4d479896adde367c1e90878d979",
+  "evidence": {
+    "batch": 271,
+    "original_loss": 15.614091873168945,
+    "patched_loss": 15.614091873168945,
+    "original_logits_equal_patched": true,
+    "original_feature_gradient_finite": false,
+    "original_head_gradient_finite": false,
+    "boundary_entries": [
+      {
+        "sample": 35,
+        "class_id": 312,
+        "label": 5215,
+        "raw_cos": 1.0,
+        "is_target": false
+      }
+    ],
+    "patched_full_model_gradient_finite": true
+  },
+  "sampled_batch_losses": {
+    "1": 16.81053924560547,
+    "50": 15.905447006225586,
+    "100": 15.65965461730957,
+    "150": 15.631460189819336,
+    "200": 15.993364334106445,
+    "250": 15.599491119384766,
+    "271": 15.614091873168945,
+    "300": 16.12871742248535
+  },
+  "protected_hashes_unchanged": {
+    "F:\\FaceX-Zoo\\fine-tune\\checkpoints\\shared_parent_v3\\finetune_survface_magface_seed8975\\finetune_mobilefacenet_1024d_magface_epoch_20.pt": "7992b8d9d2317b5e1f630fdcefae85090836e7e218cc495ba0d8e3bd1368d204",
+    "F:\\FaceX-Zoo\\fine-tune\\checkpoints\\shared_parent_v3\\finetune_survface_magface_seed8975\\progress.json": "d617961d86122e792643194f8b5b89959958cd90fb4f31d974bbedc6a6eb39c6",
+    "F:\\FaceX-Zoo\\fine-tune\\notebooks\\03_finetune.ipynb": "53a9b65b495f5abc1318031e03b8d2f3b687dc3e2945c17f6948e1b326c4b51a"
+  }
+}

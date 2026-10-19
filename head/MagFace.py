@@ -38,7 +38,11 @@ class MagFace(Module):
         feats = F.normalize(feats)
         cos_theta = torch.mm(feats, kernel_norm) 
         cos_theta = cos_theta.clamp(-1, 1)
-        sin_theta = torch.sqrt(1.0 - torch.pow(cos_theta, 2))
+        # sqrt'(0) is infinite, including for masked non-target classes.
+        # Match ArcFace's boundary policy without changing the cosine logits.
+        sin_theta = torch.sqrt(
+            (1.0 - torch.pow(cos_theta, 2)).clamp_min(torch.finfo(cos_theta.dtype).eps)
+        )
         cos_theta_m = cos_theta * cos_m - sin_theta * sin_m
         # 0 <= theta + m <= pi, ==> -m <= theta <= pi-m
         # because 0<=theta<=pi, so, we just have to keep theta <= pi-m, that is cos_theta >= cos(pi-m)

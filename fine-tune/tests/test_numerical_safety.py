@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "fine-tune"))
 from head.ArcFace import ArcFace
+from head.MagFace import MagFace
 from modules import notebook_workflow as flow
 from modules.checkpoint_manager import CheckpointManager, load_checkpoint
 from modules.model_builder import build_model
@@ -61,6 +62,51 @@ def test_arcface_interior_matches_original_formula_and_gradients(dtype):
     expected = expected * head.scale
     expected_grads = torch.autograd.grad(expected.sum(), (feats, head.weight))
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    for actual_grad, expected_grad in zip(actual_grads, expected_grads):
+        torch.testing.assert_close(actual_grad, expected_grad, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize("sign", [-1., 1.])
+@pytest.mark.parametrize("target", [0, 1])
+def test_magface_boundary_has_finite_forward_and_backward(dtype, sign, target):
+    head = MagFace(2, 2, scale=64.).to(dtype=dtype)
+    with torch.no_grad():
+        head.weight.copy_(torch.eye(2, dtype=dtype))
+    feats = torch.tensor([[20. * sign, 0.]], dtype=dtype, requires_grad=True)
+    labels = torch.tensor([target])
+    logits, regularizer = head(feats, labels)
+    loss = F.cross_entropy(logits, labels) + regularizer.mean()
+    loss.backward()
+    assert torch.isfinite(logits).all() and torch.isfinite(loss)
+    assert torch.isfinite(feats.grad).all()
+    assert torch.isfinite(head.weight.grad).all()
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_magface_interior_preserves_logits_regularizer_and_gradients(dtype):
+    head = MagFace(2, 2, scale=64.).to(dtype=dtype)
+    with torch.no_grad():
+        head.weight.copy_(torch.eye(2, dtype=dtype))
+    feats = torch.tensor([[12., 16.], [-24., 18.]], dtype=dtype, requires_grad=True)
+    labels = torch.tensor([0, 1])
+    actual, actual_g = head(feats, labels)
+    actual_loss = F.cross_entropy(actual, labels) + actual_g.mean()
+    actual_grads = torch.autograd.grad(actual_loss, (feats, head.weight))
+
+    norm = feats.norm(dim=1, keepdim=True).clamp(head.l_a, head.u_a)
+    margin = head.calc_margin(norm)
+    cos = (F.normalize(feats) @ F.normalize(head.weight, dim=0)).clamp(-1, 1)
+    adjusted = cos * margin.cos() - (1 - cos.pow(2)).sqrt() * margin.sin()
+    adjusted = torch.where(cos > torch.cos(torch.pi - margin), adjusted, cos - head.margin_am)
+    expected = cos.clone()
+    expected[torch.arange(2), labels] = adjusted[torch.arange(2), labels]
+    expected = expected * head.scale
+    expected_g = head.lamda * (1 / head.u_a**2 * norm + 1 / norm)
+    expected_loss = F.cross_entropy(expected, labels) + expected_g.mean()
+    expected_grads = torch.autograd.grad(expected_loss, (feats, head.weight))
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    torch.testing.assert_close(actual_g, expected_g, rtol=0, atol=0)
     for actual_grad, expected_grad in zip(actual_grads, expected_grads):
         torch.testing.assert_close(actual_grad, expected_grad, rtol=0, atol=0)
 

@@ -53,8 +53,9 @@ class NonFiniteTrainingError(RuntimeError):
 
 
 TRAINING_NUMERICS = {
-    "version": "20261016_nonfinite_guard_v1",
+    "version": "20261018_magface_sqrt_floor_v2",
     "arcface_sqrt_floor": "torch.finfo(cos_theta.dtype).eps",
+    "magface_sqrt_floor": "torch.finfo(cos_theta.dtype).eps",
     "loss_check": "every_batch_before_backward",
     "gradient_check": "every_batch_before_optimizer_step_inf_norm_no_clipping",
     "on_nonfinite": "abort_without_saving_current_state",

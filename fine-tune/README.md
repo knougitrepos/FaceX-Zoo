@@ -124,3 +124,5 @@ py -3.11 -B -m pytest fine-tune/tests -q -p no:cacheprovider
 ```
 
 단위 테스트, 임시 소량 이미지 학습, 전체 VGGFace2 정식 학습은 구분한다. 실제 검증 결과는 해당 작업 보고서에 기록한다.
+
+MagFace의 sqrt 경계 보정, 실제 실패 batch 재현, epoch 20 checkpoint에서의 재개 방법은 [MagFace 수치 복구 보고서](reports/magface_numerical_recovery_20261018_v1.md)를 따른다. 진단 300 batch는 정식 checkpoint로 저장하지 않았으므로 재개는 epoch 21 처음부터다. 새 수치 정책과 재개 원본의 이전 정책을 함께 기록한다.
