@@ -8,6 +8,26 @@ import uuid
 from pathlib import Path
 
 
+def launch_alignment(base_dir, cfg, dataset, max_images=32, output_dir=None, device="cpu"):
+    """Run dataset-specific CPU preprocessing with the notebook's exact settings."""
+    from .notebook_workflow import save_settings
+    root = Path(base_dir)
+    ticket = root / "fine-tune/data/adjust1/alignment_launches" / uuid.uuid4().hex
+    ticket.mkdir(parents=True)
+    request = ticket / "settings.json"
+    save_settings(request, cfg)
+    if max_images is not None and output_dir is None:
+        output_dir = ticket / "bounded_audit"
+    cmd = [sys.executable, "-u", str(root / "fine-tune/scripts/prepare_alignment.py"),
+           "--settings", str(request), "--dataset", dataset, "--device", device]
+    if max_images is not None:
+        cmd += ["--max-images", str(max_images)]
+    if output_dir is not None:
+        cmd += ["--output-dir", str(output_dir)]
+    print(f"Alignment settings: {request}; bounded limit: {max_images}", flush=True)
+    subprocess.run(cmd, cwd=root, check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
 def launch_campaign(base_dir, cfg, stage, resume_checkpoints=None, smoke=False,
                     benchmark_workers=None, benchmark_steps=100):
     root = Path(base_dir)

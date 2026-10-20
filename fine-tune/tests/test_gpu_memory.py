@@ -15,9 +15,9 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from backbone.MobileFaceNets import MobileFaceNet
-from head.ArcFace import ArcFace
+sys.path.insert(0, os.path.join(BASE_DIR, "fine-tune"))
+from modules.target_margin import ArcFace, MagFace
 from head.AdaFace import AdaFace
-from head.MagFace import MagFace
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA GPU required for memory profiling")

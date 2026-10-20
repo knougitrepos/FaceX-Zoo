@@ -17,9 +17,11 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from backbone.MobileFaceNets import MobileFaceNet
-from head.ArcFace import ArcFace
+try:
+    from .target_margin import ArcFace, MagFace
+except ImportError:  # Existing standalone scripts import model_builder directly.
+    from modules.target_margin import ArcFace, MagFace
 from head.AdaFace import AdaFace
-from head.MagFace import MagFace
 from head.AM_Softmax import AM_Softmax
 
 logger = logging.getLogger("fine_tune.model")

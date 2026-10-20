@@ -16,17 +16,18 @@ def benchmark(cfg, workers, steps):
     import torch
     import cv2
     from modules.notebook_workflow import make_loaders, _formal_device
+    from modules.alignment import bind_aligned_dataset
     from modules.model_builder import build_model
     from modules.trainer import set_seed
     results = []
     for count in workers:
-        current = copy.deepcopy(cfg)
+        current = bind_aligned_dataset(cfg)
         current["training"]["num_workers"] = count
         torch.set_num_threads(current["training"].get("torch_threads", 2))
         cv2.setNumThreads(1)
         set_seed(current["project"]["seed"])
         device = _formal_device(current)
-        model = build_model(current["backbone"], dict(current["heads"]["arcface"], num_class=current["dataset"]["num_classes"])).to(device)
+        model = build_model(current["backbone"], dict(current["parent_head"], num_class=current["dataset"]["num_classes"])).to(device)
         model.train()
         optimizer = torch.optim.Adam(model.parameters(), lr=current["training"]["lr"], weight_decay=current["training"]["weight_decay"])
         loader = val = iterator = None
@@ -47,7 +48,11 @@ def benchmark(cfg, workers, steps):
                 if aux is not None:
                     loss = loss + aux.mean()
                 optimizer.zero_grad()
+                if not bool(torch.isfinite(loss)):
+                    raise ValueError("Non-finite benchmark loss")
                 loss.backward()
+                if any(p.grad is not None and not bool(torch.isfinite(p.grad).all()) for p in model.parameters()):
+                    raise ValueError("Non-finite benchmark gradient; update blocked")
                 optimizer.step()
                 if step == 9:
                     torch.cuda.synchronize(device)

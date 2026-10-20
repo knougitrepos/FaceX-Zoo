@@ -64,6 +64,39 @@ def cfg(tmp_path, monkeypatch):
     return result
 
 
+@pytest.fixture
+def aligned_cfg(cfg, tmp_path, monkeypatch):
+    """Real cropper and resize paths with synthetic images/provided coordinates."""
+    from modules import alignment
+    result = copy.deepcopy(cfg)
+    result["dataset"].update(train_list=str(tmp_path / "full_train.txt"), val_list=None)
+    result["training"]["batch_size"] = 6  # exercise an incomplete final batch of 2
+    flow.prepare_indices(result)
+    import io
+    import tarfile
+    member = "bb_landmark/loose_landmark_train.csv"
+    archive = tmp_path / "landmarks.tar.gz"
+    header = "NAME_ID," + ",".join(f"P{i}{axis}" for i in range(1, 6) for axis in "XY") + "\n"
+    coords = "38.2946,51.6963,73.5318,51.5014,56.0252,71.7366,41.5493,92.3655,70.7299,92.2041"
+    content = header + "".join(f"{name},{coords}\n" for name, _ in alignment.read_rows(result["dataset"]["train_list"]))
+    with tarfile.open(archive, "w:gz") as tar:
+        info = tarfile.TarInfo(member)
+        data = content.encode()
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    result["alignment"]["vggface2"].update(archive=str(archive), member=member)
+    for name, ds in (("parent", result["dataset"]), ("tiny", result["finetune_profiles"]["tinyface"])):
+        out = tmp_path / name
+        provider = alignment.create_preprocessor(ROOT, result, ds)
+        try:
+            alignment.prepare_alignment(ds["train_list"], ds["raw_root"], out, provider)
+        finally:
+            if hasattr(provider, "close"):
+                provider.close()
+        ds["alignment_report"] = str(out / "report.json")
+    return result
+
+
 def test_current_notebook_variables_override_saved_and_yaml(cfg, tmp_path):
     path = tmp_path / "settings.json"
     flow.save_settings(path, cfg)
@@ -120,7 +153,8 @@ def test_environment_never_claims_unchecked_integrity(cfg):
     assert state["identity_count_matches"] is True
 
 
-def test_real_small_image_matrix_and_export(cfg, monkeypatch):
+def test_real_small_image_matrix_and_export(aligned_cfg, monkeypatch):
+    cfg = aligned_cfg
     # CPU only for this bounded test; production formal path still requires CUDA.
     monkeypatch.setattr(flow, "_formal_device", lambda config: torch.device("cpu"))
     monkeypatch.setattr(flow, "validate_paper_parameters", lambda config: None)  # tiny diagnostic architecture only
@@ -148,6 +182,8 @@ def test_real_small_image_matrix_and_export(cfg, monkeypatch):
         for out in exports:
             meta = json.loads(Path(out["export"]).with_name(Path(out["export"]).stem + "_meta.json").read_text())
             assert meta["preprocessing"]["pixel_std"] == 255
+            assert meta["preprocessing"]["alignment"] == "resize_only"
+            assert meta["preprocessing"]["alignment_policy"]["interpolation"] == "bicubic"
             assert meta["fiqa_evaluation"] == "not_executed"
             if out["head"] == "cosface":
                 assert meta["source_config"]["head"]["type"] == "AM_Softmax"
@@ -175,7 +211,8 @@ def test_campaign_failure_records_remaining_work(cfg, monkeypatch):
     assert summary["rows"][0]["status"] == "failed"
 
 
-def test_interrupted_resume_allows_subset_and_retention_override(cfg, monkeypatch):
+def test_interrupted_resume_allows_subset_and_retention_override(aligned_cfg, monkeypatch):
+    cfg = aligned_cfg
     from modules.trainer import Trainer
     monkeypatch.setattr(flow, "_formal_device", lambda config: torch.device("cpu"))
     original = Trainer.train_one_epoch

@@ -65,7 +65,7 @@ def test_cosface_margin_is_hashed_and_compared():
 @pytest.mark.parametrize("name,stage", [
     ("03_finetune.ipynb", "finetune"), ("04_export_and_validate.ipynb", "export"),
 ])
-def test_notebook_adds_cosface_over_legacy_saved_settings(name, stage, tmp_path, monkeypatch):
+def test_notebook_adds_cosface_over_three_head_adjust1_settings(name, stage, tmp_path, monkeypatch):
     # Do not mutate the user's saved settings or launch any training/audit/export.
     from modules import process_runner, finetune_protocol
     def forbidden(*args, **kwargs):
@@ -84,7 +84,7 @@ def test_notebook_adds_cosface_over_legacy_saved_settings(name, stage, tmp_path,
         if cell["cell_type"] != "code":
             continue
         source = "".join(cell["source"]).replace(
-            'SETTINGS_PATH = BASE_DIR / "fine-tune/data/notebook_settings.json"',
+            'SETTINGS_PATH = BASE_DIR / "fine-tune/data/adjust1/notebook_settings_v2.json"',
             f"SETTINGS_PATH = Path({str(saved_path)!r})",
         )
         exec(compile(source, name, "exec"), namespace)

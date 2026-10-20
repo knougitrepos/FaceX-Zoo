@@ -24,7 +24,7 @@ def initialize_worker(worker_id):
 
 class EpochBatchSampler(Sampler):
     """Epoch ordering independent of worker count, with explicit resume offset."""
-    def __init__(self, size, batch_size, seed, shuffle=True, drop_last=True):
+    def __init__(self, size, batch_size, seed, shuffle=True, drop_last=False):
         self.size, self.batch_size, self.seed = size, batch_size, seed
         self.shuffle, self.drop_last = shuffle, drop_last
         self.epoch, self.start_batch = 1, 0

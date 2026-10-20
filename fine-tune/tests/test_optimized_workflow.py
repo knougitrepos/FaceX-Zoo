@@ -17,7 +17,7 @@ from modules.trainer import Trainer, TrainingStopped, set_seed
 from modules.checkpoint_manager import CheckpointManager, load_checkpoint
 from modules.model_builder import build_model
 from modules.finetune_protocol import prepare_protocol, verify_protocol
-from test_notebook_workflow import cfg
+from test_notebook_workflow import cfg, aligned_cfg
 
 
 def test_spawn_workers_preserve_sample_order_and_augmentation(tmp_path):
@@ -136,7 +136,8 @@ def test_legacy_input_rng_is_not_silently_resumed():
     assert any("sampling" in diff for diff in compare_configs(legacy,current,full_strict=True))
 
 
-def test_export_rejects_changed_preprocessing(cfg, monkeypatch):
+def test_export_rejects_changed_preprocessing(aligned_cfg, monkeypatch):
+    cfg = aligned_cfg
     monkeypatch.setattr(flow, "_formal_device", lambda config: torch.device("cpu"))
     monkeypatch.setattr(flow, "validate_paper_parameters", lambda config: None)
     threads = torch.get_num_threads()

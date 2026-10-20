@@ -18,7 +18,7 @@
 
 ```python
 FINETUNE_DATASETS = ["scface"]  # SCFace만 추가 생성
-FINETUNE_PROFILES = default_profiles(BASE_DIR)
+FINETUNE_PROFILES = defaults["finetune_profiles"]  # 전처리 report 경로 포함
 FINETUNE_PROFILES["scface"].update(
     enabled=True,  # 위 데이터·분할 검증을 마친 뒤에만 활성화
     raw_root="F:/FaceX-Zoo/scface",
@@ -39,8 +39,8 @@ FINETUNE_PROFILES["scface"].update(
 ## 3. 실행 순서
 
 1. 커널을 재시작하고 **00을 실행해 설정을 저장**한다.
-2. 기존 공통 부모가 완료되고 출처/hash가 맞으면 **01·02를 다시 수행할 필요는 없다**. 부모가 없거나 미완료라면 먼저 VGGFace2 준비와 02 사전학습을 완료한다.
-3. **03** 첫 셀에서 `FINETUNE_DATASETS=["scface"]`, 활성화된 프로필과 부모를 확인한다. `EXECUTE=True`, `RUN_SMOKE_TEST=False`로 실행한다. 분할 검증이 성공해야 학습이 진행된다.
+2. 새 `adjust1_preprocessing_v2` 공통 부모가 완료되고 출처/hash가 맞으면 **01·02를 다시 수행할 필요는 없다**. 부모가 없거나 미완료라면 먼저 VGGFace2 준비와 02 사전학습을 완료한다.
+3. **03** 첫 셀에서 `FINETUNE_DATASETS=["scface"]`, 활성화된 프로필과 부모를 확인한다. `RUN_PREPROCESSING=True`, `PREPROCESS_MAX_IMAGES=32`로 resize-only 표본 감사를 먼저 수행한다. 전체 준비에는 `PREPROCESS_MAX_IMAGES=None`, `EXECUTE=True`, `RUN_SMOKE_TEST=False`를 사용한다. 분할 검증과 전체 입력 준비가 성공해야 학습이 진행된다. 기본 보간법은 bicubic이며, SCface에서의 정렬 생략과 보간법은 사용자 승인 구현 정책이다.
 4. **04**에서도 같은 SCFace 설정을 확인하고 `EXECUTE=True`로 완료 모델을 export한다.
 
 03/04는 00에서 저장한 설정을 기본으로 읽는다. 나중에 다시 00을 실행할 때 `default_profiles(BASE_DIR)`만 사용하면 SCFace는 다시 비활성화되므로 위 활성화 설정을 유지해야 한다. 기존 TinyFace·SurvFace 모델은 별도 run 경로로 보존되며 SCFace 추가를 이유로 재학습하지 않는다.

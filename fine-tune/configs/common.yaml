@@ -10,12 +10,15 @@
 #     - internal dropout rate = 0.6 (IV-A-3)
 #
 # [2] 본 구현의 세부 공학적 선택 (논문 미언급):
-#     - input_size: 112x112, BGR, (pixel - 127.5) / 128.0 (FaceX-Zoo 표준, 단순 리사이즈)
+#     - input_size: 112x112는 UCFace 부록 Augmentations에 명시됨
+#     - BGR, (pixel - 127.5) / 128.0은 FaceX-Zoo 입력 방식
+#     - VGGFace2: 제공 5점 좌표 + FaceX-Zoo cropper
+#     - TinyFace/SurvFace/SCface: 사용자 승인 resize-only, 기본 bicubic
 #     - dropout 삽입 위치: 최종 선형 출력층 직전
 #     - seed: 8972 재현성 난수 초기화 (goal.md Section 4 명시 기준)
 #     - seed_list: [8972, 8973, 8974, 8975, 8976] (5회 반복 실험 기본 목록)
 #     - keep_raw_results: True (원본 결과 및 세부 산출물 보존 옵션)
-#     - 95% train / 5% val 이미지 분할
+#     - 공식 training 전체 사용; val_list=None; drop_last=False
 # ==============================================================================
 
 project:
@@ -41,6 +44,7 @@ training:
   epoches: 40            # [논문 명시] UCFace 논문 IV-A-3: 40 epochs
   milestones: [10, 20, 30] # [논문 명시] 10 epoch마다 0.1 decay
   lr_decay_ratio: 0.1
+  drop_last: false      # FaceX-Zoo conventional training: retain final batch
   batch_size: 64         # [논문 명시] UCFace 논문 IV-A-3: batch size 64 for softmax classifiers
   num_workers: 0         # Windows/Jupyter 기본: 단일 프로세스 이미지 로딩
   print_freq: 20
@@ -55,15 +59,15 @@ dataset:
   test_archive: "F:/FaceX-Zoo/VGGFace2/data/vggface2_test.tar.gz"
   meta_csv: "F:/FaceX-Zoo/VGGFace2/meta/identity_meta.csv"
   num_classes: 8631      # VGGFace2 학습 클래스 수 (Flag=1)
-  input_size: [112, 112] # [공학적 선택] 단순 리사이즈
+  input_size: [112, 112] # [UCFace 부록 명시] 모델 입력 해상도
   pixel_mean: 127.5
   pixel_std: 128.0       # [공학적 선택] (pixel - 127.5) / 128.0 정규화
   processed_root: "F:/FaceX-Zoo/fine-tune/data/vggface2_processed"
-  train_list: "F:/FaceX-Zoo/fine-tune/data/train_list.txt"
-  val_list: "F:/FaceX-Zoo/fine-tune/data/val_list.txt"
+  train_list: "F:/FaceX-Zoo/fine-tune/data/adjust1/vggface2_train.txt"
+  val_list: null
 
 # 결과 및 체크포인트 디렉터리
 paths:
-  checkpoint_dir: "F:/FaceX-Zoo/fine-tune/checkpoints"
-  log_dir: "F:/FaceX-Zoo/fine-tune/logs"
-  export_dir: "F:/FaceX-Zoo/fine-tune/checkpoints/exported"
+  checkpoint_dir: "F:/FaceX-Zoo/fine-tune/checkpoints/adjust1"
+  log_dir: "F:/FaceX-Zoo/fine-tune/logs/adjust1"
+  export_dir: "F:/FaceX-Zoo/fine-tune/checkpoints/exported/adjust1"

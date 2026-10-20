@@ -78,7 +78,7 @@ class VGGFace2ArchiveInspector:
             raise
 
 
-def apply_face_augmentation(image: np.ndarray, is_train: bool = True, rng=None) -> np.ndarray:
+def apply_face_augmentation(image: np.ndarray, is_train: bool = True, rng=None, options=None) -> np.ndarray:
     """Apply data augmentation matching UCFace paper settings.
     Baseline margin classifiers use: horizontal flip, affine scaling and rotation.
     Input image shape: [H, W, C] in BGR.
@@ -86,19 +86,23 @@ def apply_face_augmentation(image: np.ndarray, is_train: bool = True, rng=None) 
     if not is_train:
         return image
     rng = rng or random
+    from .baseline_policy import DEFAULT_AUGMENTATION, validate_augmentation
+    options = options or DEFAULT_AUGMENTATION
+    validate_augmentation(options)
 
     # Horizontal flip (50% probability)
-    if rng.random() > 0.5:
+    if rng.random() < options["flip_probability"]:
         image = cv2.flip(image, 1)
 
     # Affine transformation: rotation (-10 to 10 deg) and slight scaling (0.95 to 1.05)
-    if rng.random() > 0.5:
+    if rng.random() < options["affine_probability"]:
         h, w = image.shape[:2]
-        angle = rng.uniform(-10.0, 10.0)
-        scale = rng.uniform(0.95, 1.05)
+        angle = rng.uniform(-options["rotation_degrees"], options["rotation_degrees"])
+        scale = rng.uniform(*options["scale_range"])
         center = (w / 2.0, h / 2.0)
         matrix = cv2.getRotationMatrix2D(center, angle, scale)
-        image = cv2.warpAffine(image, matrix, (w, h), borderMode=cv2.BORDER_REFLECT)
+        border = cv2.BORDER_REFLECT if options["border_mode"] == "reflect" else cv2.BORDER_CONSTANT
+        image = cv2.warpAffine(image, matrix, (w, h), borderMode=border)
 
     return image
 
@@ -151,6 +155,8 @@ class FaceImageDataset(Dataset):
         pixel_std: float = 128.0,
         cache_dir=None,
         seed: int = 8972,
+        alignment: str = "resize_only",
+        augmentation=None,
     ):
         self.data_root = data_root
         self.index_file = index_file
@@ -161,6 +167,8 @@ class FaceImageDataset(Dataset):
         self.pixel_mean = float(pixel_mean)
         self.pixel_std = float(pixel_std)
         self.seed = int(seed)
+        self.alignment = alignment
+        self.augmentation = augmentation
         self.mapped = cache_dir is not None
         if not np.isfinite(self.pixel_mean) or not np.isfinite(self.pixel_std) or self.pixel_std <= 0:
             raise ValueError("pixel_mean/std must be finite, with pixel_std > 0")
@@ -209,12 +217,14 @@ class FaceImageDataset(Dataset):
 
         # Resize to target 112x112 if needed (Note: This is resizing, not facial landmark alignment)
         if (image.shape[0], image.shape[1]) != self.target_size:
+            if self.alignment != "resize_only":
+                raise ValueError("Aligned image dimensions differ; implicit resize is disabled")
             image = cv2.resize(image, self.target_size[::-1], interpolation=cv2.INTER_LINEAR)
 
         # Apply augmentation for training
         if self.is_train:
             rng = random.Random((self.seed << 40) ^ (int(epoch) << 32) ^ int(index))
-            image = apply_face_augmentation(image, is_train=True, rng=rng)
+            image = apply_face_augmentation(image, is_train=True, rng=rng, options=self.augmentation)
 
         # Handle grayscale (2D) images if encountered
         if image.ndim == 2:
@@ -265,6 +275,9 @@ def build_dataloader(
     seed: int = 8972,
     prefetch_factor: int = 2,
     persistent_workers: bool = True,
+    drop_last: bool = False,
+    alignment: str = "resize_only",
+    augmentation=None,
 ) -> DataLoader:
     """Build a PyTorch DataLoader for face training or evaluation."""
     dataset = FaceImageDataset(
@@ -275,9 +288,12 @@ def build_dataloader(
         pixel_mean=pixel_mean,
         pixel_std=pixel_std,
         cache_dir=cache_dir, seed=seed,
+        alignment=alignment, augmentation=augmentation,
     )
     from .input_pipeline import EpochBatchSampler, initialize_worker
-    sampler = EpochBatchSampler(len(dataset), batch_size, seed, shuffle=is_train, drop_last=is_train)
+    if is_train and not drop_last and len(dataset) % batch_size == 1:
+        raise ValueError("Final singleton batch is incompatible with BatchNorm; select a compatible batch size")
+    sampler = EpochBatchSampler(len(dataset), batch_size, seed, shuffle=is_train, drop_last=drop_last if is_train else False)
     kwargs = {}
     if num_workers > 0:
         kwargs.update(prefetch_factor=prefetch_factor, persistent_workers=persistent_workers,

@@ -303,6 +303,8 @@ def extract_model_config(model: nn.Module) -> Dict[str, Any]:
     if head is not None:
         head_type = head.__class__.__name__
         head_dict: Dict[str, Any] = {"type": head_type}
+        if hasattr(head, "numerical_policy"):
+            head_dict["numerical_policy"] = head.numerical_policy
 
         weight = getattr(head, "kernel", getattr(head, "weight", None))
         if weight is not None and hasattr(weight, "shape"):
@@ -462,6 +464,10 @@ def extract_train_config(
             "pixel_mean": pixel_mean if pixel_mean is not None else 127.5,
             "pixel_std": pixel_std if pixel_std is not None else 128.0,
         }
+        train_part["preprocessing"].update(
+            alignment=ds_cfg.get("alignment", "resize_only"),
+            alignment_policy=ds_cfg.get("alignment_policy"),
+            augmentation=cfg.get("augmentation"), color="BGR")
         train_part["dataset"] = {
             "name": str(ds_cfg.get("name", "VGGFace2")),
             "num_classes": int(ds_cfg.get("num_classes", 8631)),
@@ -471,6 +477,8 @@ def extract_train_config(
             "train_list_hash": train_list_hash,
             "val_list": val_list,
             "val_list_hash": val_list_hash,
+            "alignment_manifest_sha256": ds_cfg.get("alignment_manifest_sha256"),
+            "alignment_report_sha256": ds_cfg.get("alignment_report_sha256"),
         }
 
     # 2. Training & optimization
@@ -533,6 +541,7 @@ def extract_train_config(
             "batch_size": eff_batch_size if eff_batch_size is not None else 64,
             "milestones": eff_milestones if eff_milestones is not None else [10, 20, 30],
             "lr_decay_ratio": eff_lr_decay_ratio if eff_lr_decay_ratio is not None else 0.1,
+            "drop_last": getattr(getattr(train_loader, "batch_sampler", None), "drop_last", train_cfg.get("drop_last", False)),
         }
         train_part["training"] = training_dict
 
@@ -553,6 +562,11 @@ def extract_train_config(
 
     if parent_hash is not None:
         train_part["parent_hash"] = str(parent_hash)
+
+    if cfg.get("baseline_version"):
+        from .baseline_policy import code_fingerprints
+        train_part["baseline_version"] = cfg["baseline_version"]
+        train_part["code_fingerprints"] = code_fingerprints()
 
     return train_part
 
@@ -649,7 +663,7 @@ def compare_configs(
     curr_hd = current_cfg.get("head", {})
     head_keys = [
         "type", "feat_dim", "num_class", "margin_arc", "margin_am", "margin", "scale",
-        "m", "h", "t_alpha", "l_a", "u_a", "l_margin", "u_margin", "lamda"
+        "m", "h", "t_alpha", "l_a", "u_a", "l_margin", "u_margin", "lamda", "numerical_policy"
     ]
     for key in head_keys:
         if full_strict:
@@ -708,6 +722,18 @@ def compare_configs(
                 _diff_val(f"Training {key}", ckpt_opt[key], curr_opt[key])
 
     # 6. Global identifiers
+    # Research policy is never waived by legacy/partial config compatibility.
+    for key in ("baseline_version", "code_fingerprints"):
+        if ckpt_cfg.get(key) != current_cfg.get(key):
+            mismatches.append(f"{key} mismatch")
+    for key in ("alignment", "alignment_policy", "augmentation", "color"):
+        if ckpt_pre.get(key) != curr_pre.get(key):
+            mismatches.append(f"Preprocessing {key} mismatch")
+    for key in ("alignment_manifest_sha256", "alignment_report_sha256"):
+        if ckpt_ds.get(key) != curr_ds.get(key):
+            mismatches.append(f"Dataset {key} mismatch")
+    if ckpt_opt.get("drop_last") != curr_opt.get("drop_last"):
+        mismatches.append("Training drop_last mismatch")
     for key in ["seed", "stage", "parent_hash"]:
         if full_strict:
             if key in ckpt_cfg or key in current_cfg:

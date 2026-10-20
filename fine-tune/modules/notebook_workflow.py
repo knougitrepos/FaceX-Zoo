@@ -31,6 +31,8 @@ from .dataset import VGGFace2ArchiveInspector, build_dataloader, validate_datase
 from .model_builder import build_model
 from .trainer import Trainer, set_seed, TrainingStopped
 from .finetune_protocol import default_profiles, verify_protocol
+from .baseline_policy import VERSION, DEFAULT_AUGMENTATION, validate_augmentation, code_fingerprints
+from .alignment import bind_aligned_dataset
 
 HEAD_NAMES = ("arcface", "adaface", "magface", "cosface")
 
@@ -61,8 +63,30 @@ def resolve_settings(base_dir, settings_path=None, overrides=None, require_saved
     cfg["paths"]["cache_dir"] = str(root / "fine-tune/data/index_cache")
     cfg["training"].update(num_workers=4, prefetch_factor=4, persistent_workers=True,
                             torch_threads=2, recovery_minutes=10, loss_sync_batches=20)
+    cfg["baseline_version"] = VERSION
+    cfg["parent_head"] = dict(type="ArcFace", margin_arc=0.35, margin_am=0.0, scale=32.0)
+    cfg["augmentation"] = copy.deepcopy(DEFAULT_AUGMENTATION)
+    cfg["alignment"] = {
+        "vggface2": {"method": "official_landmarks",
+                     "archive": str(root / "VGGFace2/meta/bb_landmark.tar.gz"),
+                     "member": "bb_landmark/loose_landmark_train.csv"},
+        "low_resolution": {"method": "resize_only", "interpolation": "bicubic"},
+    }
+    cfg["training"]["drop_last"] = False
+    cfg["dataset"].update(train_list=str(root / "fine-tune/data/adjust1/vggface2_train.txt"), val_list=None,
+                          alignment_report=str(root / "fine-tune/data/adjust1/preprocessed_v2/vggface2/report.json"))
+    for name, profile in cfg["finetune_profiles"].items():
+        profile["alignment_report"] = str(root / f"fine-tune/data/adjust1/preprocessed_v2/{name}/report.json")
+    cfg["paths"].update(checkpoint_dir=str(root / "fine-tune/checkpoints/adjust1"),
+                        export_dir=str(root / "fine-tune/checkpoints/exported/adjust1"),
+                        log_dir=str(root / "fine-tune/logs/adjust1"),
+                        report_dir=str(root / "fine-tune/reports/campaigns/adjust1"),
+                        cache_dir=str(root / "fine-tune/data/adjust1/index_cache"))
     if settings_path and Path(settings_path).is_file():
-        cfg = merge_settings(cfg, json.loads(Path(settings_path).read_text(encoding="utf-8")))
+        saved = json.loads(Path(settings_path).read_text(encoding="utf-8"))
+        if saved.get("baseline_version") != VERSION:
+            raise ValueError("Legacy settings cannot be reused for preprocessing v2; use notebook 00 with its new settings path")
+        cfg = merge_settings(cfg, saved)
     elif require_saved:
         raise FileNotFoundError(f"Run notebook 00 to save settings first: {settings_path}")
     cfg = merge_settings(cfg, overrides or {})
@@ -71,6 +95,22 @@ def resolve_settings(base_dir, settings_path=None, overrides=None, require_saved
 
 
 def validate_settings(cfg):
+    if cfg.get("baseline_version") != VERSION:
+        raise ValueError("Unsupported baseline_version")
+    preprocessing = cfg["alignment"]
+    if set(preprocessing) != {"vggface2", "low_resolution"}:
+        raise ValueError("Use provided VGGFace2 landmarks and low-resolution resize_only; legacy detectors are unsupported")
+    if preprocessing["vggface2"].get("method") != "official_landmarks":
+        raise ValueError("VGGFace2 requires official_landmarks")
+    if preprocessing["low_resolution"] not in (
+        {"method": "resize_only", "interpolation": "bicubic"},
+        {"method": "resize_only", "interpolation": "bilinear"},
+    ):
+        raise ValueError("Specify low-resolution resize_only with bicubic or bilinear interpolation")
+    validate_augmentation(cfg["augmentation"])
+    for path in cfg["paths"].values():
+        if "shared_parent_v3" in str(path):
+            raise ValueError("adjust1 must not write/reuse shared_parent_v3 paths")
     seeds = cfg["project"]["seed_list"]
     heads = cfg["campaign"]["heads"]
     if not seeds or len(seeds) != len(set(seeds)) or any(type(s) is not int or s < 0 or s >= 2**32 for s in seeds):
@@ -144,7 +184,7 @@ def inspect_environment(base_dir, cfg):
     except (OSError, subprocess.CalledProcessError):
         branch = None
     checks["branch"] = branch
-    checks["branch_matches"] = branch == "add-adaface"
+    checks["branch_matches"] = branch == "adjust1"
     for key in ("train_archive", "test_archive", "meta_csv"):
         p = Path(ds[key])
         checks[key] = {"exists": p.is_file(), "bytes": p.stat().st_size if p.is_file() else None}
@@ -163,8 +203,49 @@ def inspect_environment(base_dir, cfg):
     return checks
 
 
-def prepare_indices(cfg, val_every=20):
-    """Preserve the existing deterministic 95:5 split; never replace differing lists."""
+def prepare_indices(cfg, val_every=None):
+    """Full official training list by default. Explicit legacy splits are audit-only."""
+    if val_every is None:
+        ds = cfg["dataset"]
+        if ds.get("val_list"):
+            raise ValueError("Full training requires val_list=None")
+        ids = VGGFace2ArchiveInspector(ds["raw_root"]).parse_identity_meta(train_only=True)
+        if len(ids) != ds["num_classes"]:
+            raise ValueError("Metadata class count differs from NUM_CLASSES")
+        labels = {x["class_id"]: i for i, x in enumerate(ids)}
+        root = Path(ds["raw_root"])
+        source = next((p for p in (root / "meta/train_list.txt", root / "data/train_list.txt") if p.is_file()), None)
+        if source is None:
+            raise FileNotFoundError("Original VGGFace2 train_list.txt is missing")
+        target = Path(ds["train_list"])
+        if target.resolve() == source.resolve():
+            raise ValueError("Source and generated training list must differ")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temp = target.with_name(target.name + f".{uuid.uuid4().hex}.tmp")
+        count, seen, seen_ids = 0, set(), set()
+        try:
+            with source.open(encoding="utf-8") as src, temp.open("w", encoding="utf-8") as dst:
+                for line in src:
+                    rel = line.strip().replace("\\", "/")
+                    if not rel:
+                        continue
+                    identity = rel.removeprefix("train/").split("/")[0]
+                    if identity not in labels or rel in seen:
+                        raise ValueError("Unknown training identity or duplicate image")
+                    seen.add(rel)
+                    seen_ids.add(identity)
+                    dst.write(f"{rel} {labels[identity]}\n")
+                    count += 1
+            if seen_ids != set(labels):
+                raise ValueError("Training list does not cover every official training identity")
+            if target.exists() and compute_sha256(str(target)) != compute_sha256(str(temp)):
+                raise FileExistsError(f"Existing training list differs: {target}")
+            if not target.exists():
+                os.replace(temp, target)
+        finally:
+            temp.unlink(missing_ok=True)
+        return {"train_count": count, "val_count": 0, "train_sha256": compute_sha256(str(target)),
+                "source_sha256": compute_sha256(str(source)), "split": "official_train_all"}
     if val_every < 2:
         raise ValueError("VAL_EVERY must be >= 2")
     ds = cfg["dataset"]
@@ -214,6 +295,7 @@ def prepare_indices(cfg, val_every=20):
 
 def make_loaders(cfg):
     ds, train = cfg["dataset"], cfg["training"]
+    data_root = ds.get("data_root", ds["raw_root"])
     loaders = []
     for key, is_train in (("train_list", True), ("val_list", False)):
         index = ds.get(key)
@@ -222,7 +304,7 @@ def make_loaders(cfg):
             continue
         if not index or not Path(index).is_file() or Path(index).stat().st_size == 0:
             raise FileNotFoundError(f"Required nonempty {key}: {index}")
-        _, missing = validate_dataset_files(ds["raw_root"], index, max_check=20)
+        _, missing = validate_dataset_files(data_root, index, max_check=20)
         if missing:
             raise FileNotFoundError(
                 f"Missing image: {missing[0]}. Index creation does not extract images. "
@@ -230,14 +312,16 @@ def make_loaders(cfg):
                 f"or check DATASET['raw_root']={ds['raw_root']!r}."
             )
         loader = build_dataloader(
-            data_root=ds["raw_root"], index_file=index,
+            data_root=data_root, index_file=index,
             batch_size=train["batch_size"], num_workers=train["num_workers"], is_train=is_train,
             target_size=tuple(ds["input_size"]), pixel_mean=ds["pixel_mean"], pixel_std=ds["pixel_std"],
             cache_dir=cfg.get("paths", {}).get("cache_dir"), seed=cfg.get("project", {}).get("seed", 8972),
             prefetch_factor=train.get("prefetch_factor", 2), persistent_workers=train.get("persistent_workers", True),
+            drop_last=train.get("drop_last", False), alignment=ds.get("alignment", "resize_only"),
+            augmentation=cfg.get("augmentation"),
         )
         if len(loader) == 0:
-            raise ValueError(f"No usable batches in {key}; training drops incomplete batches")
+            raise ValueError(f"No usable batches in {key}")
         samples = loader.dataset.samples
         invalid = (np.any(samples.labels < 0) or np.any(samples.labels >= ds["num_classes"])) if hasattr(samples, "labels") else any(label < 0 or label >= ds["num_classes"] for _, label in samples)
         if invalid:
@@ -297,8 +381,23 @@ def validate_paper_parameters(cfg):
                 raise ValueError(f"Paper low-resolution baseline requires {head}.{key}={value}")
 
 
+def validate_parent_preprocessing(parent_cfg, parent_dataset, settings):
+    """Validate the parent against its own recipe, not the downstream resize."""
+    from .alignment import alignment_policy
+    policy = alignment_policy(Path(__file__).resolve().parents[2], settings, "vggface2")
+    expected = {key: parent_dataset[key] for key in ("input_size", "pixel_mean", "pixel_std")}
+    expected.update(alignment=policy["version"], alignment_policy=policy)
+    for key, desired in expected.items():
+        actual = parent_cfg.get("preprocessing", {}).get(key)
+        if key == "input_size" and actual is not None:
+            actual, desired = list(actual), list(desired)
+        if actual != desired:
+            raise ValueError(f"Common parent preprocessing.{key} differs")
+
+
 def _run_one(cfg, row, resume_path=None, smoke=False):
     cfg = copy.deepcopy(cfg)
+    parent_dataset = copy.deepcopy(cfg["dataset"])
     cfg["project"]["seed"] = row["seed"]
     torch.set_num_threads(cfg["training"].get("torch_threads", 2))
     cv2.setNumThreads(1)
@@ -312,6 +411,17 @@ def _run_one(cfg, row, resume_path=None, smoke=False):
             verify_protocol(profile)
             validate_paper_parameters(cfg)
         cfg["dataset"] = merge_settings(cfg["dataset"], profile)
+    if stage == "pretrain":
+        cfg["heads"]["arcface"] = dict(cfg["parent_head"])
+    if not smoke:
+        if cfg["training"].get("drop_last") is not False or cfg["dataset"].get("val_list"):
+            raise ValueError("adjust1 requires full training data, val_list=None, drop_last=False")
+        if stage == "pretrain":
+            expected = dict(type="ArcFace", margin_arc=0.35, margin_am=0.0, scale=32.0)
+            if cfg["parent_head"] != expected:
+                raise ValueError("adjust1 parent requires FaceX-Zoo ArcFace m=.35/s=32")
+            prepare_indices(cfg)
+        cfg = bind_aligned_dataset(cfg)
     final_path = checkpoint_path(cfg, stage, head, seed)
     run_dir = final_path.parent if not smoke else Path(cfg["paths"]["checkpoint_dir"]) / "smoke" / row["run_id"]
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu") if smoke else _formal_device(cfg)
@@ -333,13 +443,14 @@ def _run_one(cfg, row, resume_path=None, smoke=False):
             for key in ("feat_dim", "dropout_rate"):
                 if parent_cfg.get("backbone", {}).get(key) != cfg["backbone"][key]:
                     raise ValueError(f"Common parent backbone.{key} differs")
-            for key in ("input_size", "pixel_mean", "pixel_std"):
-                actual = parent_cfg.get("preprocessing", {}).get(key)
-                desired = cfg["dataset"][key]
-                if key == "input_size" and actual is not None:
-                    actual, desired = list(actual), list(desired)
-                if actual != desired:
-                    raise ValueError(f"Common parent preprocessing.{key} differs")
+            if parent_cfg.get("baseline_version") != VERSION or parent_cfg.get("head", {}).get("numerical_policy") != "target_only_original_sqrt_v1":
+                raise ValueError("Common parent must be trained under adjust1/A policy")
+            if parent_cfg.get("code_fingerprints") != code_fingerprints():
+                raise ValueError("Common parent source code differs from the selected adjust1 implementation")
+            for key in ("margin_arc", "margin_am", "scale"):
+                if parent_cfg["head"].get(key) != cfg["parent_head"][key]:
+                    raise ValueError(f"Common parent head.{key} differs")
+            validate_parent_preprocessing(parent_cfg, parent_dataset, cfg["alignment"])
         head_cfg = dict(cfg["heads"][head], num_class=cfg["dataset"]["num_classes"])
         model = build_model(cfg["backbone"], head_cfg).to(device)
         if parent is not None:
@@ -354,7 +465,11 @@ def _run_one(cfg, row, resume_path=None, smoke=False):
             loss = torch.nn.functional.cross_entropy(logits, y)
             if aux is not None:
                 loss = loss + aux.mean()
+            if not bool(torch.isfinite(loss)):
+                raise ValueError("Non-finite smoke loss; optimizer update blocked")
             loss.backward()
+            if any(p.grad is not None and not bool(torch.isfinite(p.grad).all()) for p in model.parameters()):
+                raise ValueError("Non-finite smoke gradient; optimizer update blocked")
             optimizer.step()
             # A smoke run produces diagnostics only; it cannot become a formal parent.
             return {**row, "status": "smoke", "completed": False, "is_smoke": True,
@@ -466,11 +581,12 @@ def _export_one(cfg, row):
     source_hash = compute_sha256(str(path))
     profile = cfg["finetune_profiles"][row["dataset"]]
     verify_protocol(profile)
-    if stored["dataset"]["name"] != row["dataset"] or stored["dataset"]["train_list_hash"] != compute_sha256(profile["train_list"]):
+    if stored["dataset"]["name"] != row["dataset"]:
         raise ValueError("Export source does not match the selected dataset protocol")
     selected = copy.deepcopy(cfg)
     selected["project"]["seed"] = seed
     selected["dataset"] = merge_settings(selected["dataset"], profile)
+    selected = bind_aligned_dataset(selected)
     model = build_model(selected["backbone"], dict(selected["heads"][head], num_class=profile["num_classes"]))
     expected = extract_model_and_train_config(model, selected, seed=seed, stage="finetune",
                                               head_type=head, parent_hash=payload.get("parent_hash"))
@@ -493,7 +609,7 @@ def _export_one(cfg, row):
                     "source_checkpoint": str(path), "source_sha256": source_hash,
                     "source_config": stored, "source_config_hash": payload["config_hash"],
                     "execution_settings": payload.get("extra_meta", {}).get("execution_settings"),
-                    "preprocessing": {**stored.get("preprocessing", {}), "color": "BGR", "alignment": "resize_only"},
+                    "preprocessing": {**stored.get("preprocessing", {}), "color": "BGR"},
                     "parent_hash": payload.get("parent_hash"), "epochs": payload["epoch"],
                     "common_parent_seed": cfg["campaign"]["parent_seed"],
                     "protocol_record": json.loads(Path(profile["protocol_record"]).read_text(encoding="utf-8")),

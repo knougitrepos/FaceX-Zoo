@@ -1,5 +1,22 @@
 # FaceX-Zoo 노트북 실행 안내
 
+## adjust1: 현재 실행 경로 (2026-10-20)
+
+새 캠페인의 실행 절차와 검증 범위는 [adjust1.md](adjust1.md)를 따른다.
+이번 전처리 수정의 검증 결과는 [preprocessing_v2_validation.md](reports/preprocessing_v2_validation.md)에 기록했다.
+`shared_parent_v3`의 완료 결과는 기존 조건의 결과로 보존한다.
+
+- 설정: `fine-tune/data/adjust1/notebook_settings_v2.json`, 버전 `adjust1_preprocessing_v2`
+- 부모 입력: VGGFace2 공식 5점 좌표 + FaceX-Zoo 원본 cropper의 112×112 정렬
+- 후속 입력: TinyFace·SurvFace·SCface의 전체 얼굴 crop을 112×112 resize-only, 기본 bicubic. 사용자 승인 구현 정책이며 UCFace의 미공개 전처리를 확인했다는 뜻은 아니다.
+- 새로운 얼굴 검출/랜드마크 추정은 없다. 원본 데이터와 상위 SDK/head/backbone은 수정하지 않는다.
+- 부모 ArcFace `m=0.35,s=32`, 후속 ArcFace `m=0.6,s=64`; 기존 target-only sqrt 및 학습 설정 유지
+- 공식 training 전체, `val_list=None`, `drop_last=False`; 준비 실패 샘플 자동 제외 없음
+- 모든 노트북은 계획 모드로 시작한다. **00 설정 → 01 부모 입력 준비 → 02 부모 학습 → 03 대상 입력 준비·후속 학습 → 04 export** 순서다.
+- `RUN_PREPROCESSING=True`, `PREPROCESS_MAX_IMAGES=32`는 감사이며 전체 준비에는 `None`을 사용한다. 이전 SDK 준비 보고서와 설정은 새 정책에 재사용하지 않는다.
+
+아래는 기존 캠페인의 실행 이력과 일반 설명이다. 기존 경로·재개 checkpoint·95:5 분리를 새 adjust1 캠페인에 적용하지 않는다.
+
 사용자 설정은 **노트북 첫 코드 셀**에서 조절한다. YAML은 누락값을 위한 기본값이며 직접 편집할 필요가 없다.
 
 ## 설정 우선순위와 실행 순서

@@ -53,9 +53,11 @@ class NonFiniteTrainingError(RuntimeError):
 
 
 TRAINING_NUMERICS = {
-    "version": "20261018_magface_sqrt_floor_v2",
-    "arcface_sqrt_floor": "torch.finfo(cos_theta.dtype).eps",
-    "magface_sqrt_floor": "torch.finfo(cos_theta.dtype).eps",
+    "version": "target_only_original_sqrt_v1",
+    "arcface_sqrt_floor": None,
+    "magface_sqrt_floor": None,
+    "margin_scope": "target_class_only",
+    "target_boundary": "singular; reject nonfinite gradients before update",
     "loss_check": "every_batch_before_backward",
     "gradient_check": "every_batch_before_optimizer_step_inf_norm_no_clipping",
     "on_nonfinite": "abort_without_saving_current_state",
@@ -223,8 +225,8 @@ class Trainer:
         os.replace(temp, self.progress_path)
 
     def _numerical_provenance(self):
-        # Keep execution-policy metadata separate from the scientific config
-        # hash so verified pre-fix checkpoints remain explicitly resumable.
+        # The model numerical_policy and source fingerprints are also bound to
+        # train_config/config_hash. Legacy epsilon runs cannot resume as adjust1.
         return {"training_numerics": dict(TRAINING_NUMERICS),
                 "resume_source": self.resume_source}
 
@@ -281,6 +283,7 @@ class Trainer:
         self.resume_batch, self.resume_meter = 0, None
         total = getattr(sampler, "total_batches", len(self.train_loader))
         start_time = time.time()
+        processed_images = 0
         self._progress("training", batches_completed=offset, total_batches=total)
 
         for batch_idx, (images, labels) in enumerate(self.train_loader, start=offset):
@@ -311,6 +314,7 @@ class Trainer:
                 self.optimizer.step()
 
                 loss_meter.update_tensor(loss, images.size(0))
+                processed_images += images.size(0)
             except Exception as e:
                 logger.error(f"Training step error [epoch {epoch}, batch {batch_idx}]: {e}", exc_info=True)
                 raise
@@ -329,8 +333,9 @@ class Trainer:
                 loss_meter.flush()
                 current_lr = self.optimizer.param_groups[0]["lr"]
                 elapsed = time.time() - start_time
-                rate = (done - offset) * self.train_loader.batch_sampler.batch_size / max(elapsed, 1e-9)
-                eta = (total - done) * self.train_loader.batch_sampler.batch_size / max(rate, 1e-9)
+                rate = processed_images / max(elapsed, 1e-9)
+                remaining = max(0, len(self.train_loader.dataset) - min(done * self.train_loader.batch_sampler.batch_size, len(self.train_loader.dataset)))
+                eta = remaining / max(rate, 1e-9)
                 vram_mb = 0.0
                 if torch.cuda.is_available() and getattr(self.device, "type", "") == "cuda":
                     vram_mb = torch.cuda.memory_allocated(self.device) / (1024**2)
