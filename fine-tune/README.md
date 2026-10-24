@@ -1,6 +1,18 @@
+> 현재 순차 노트북의 연구 분할·1024D 연결은 [RESEARCH_HANDOFF.md](RESEARCH_HANDOFF.md)를 먼저 따른다.
+> SurvFace·TinyFace·SCFace 파인튜닝과 ronbun 연계는 새 research_v1 namespace를 사용한다.
+> 아래 adjust1 전체 학습 기록·경로는 해당 과거 campaign의 출처로 보존한다.
+
+현재 `research_v1` 노트북의 00은 기본 네 head와 SurvFace·TinyFace·SCFace를 선택한다.
+01~04는 같은 `SETTINGS_PATH`를 사용하며, 03/04의 HEADS와 head 파라미터도 저장값을 이어받는다.
+특정 head만 선택했다면 후속 단계에서 다른 head를 자동 추가하지 않는다.
+새 namespace는 00 설정 저장 → 01 부모 입력 준비 → 02 완료 부모 → 03 후속 학습 → 04 export 순서다.
+과거의 “00·02 재실행 불필요” 안내는 동일 조건의 검증된 완료 부모가 있는 과거 캠페인에만 해당한다.
+SurvFace FR 학습은 현재 4,255명/176,205장이고 SCFace 50명/800장도 활성화되어 있다.
+실제 작업 수는 저장한 데이터셋 수 × head 수 × seed 수로 계획표에서 확인한다.
+
 # FaceX-Zoo 노트북 실행 안내
 
-## adjust1: 현재 실행 경로 (2026-10-20)
+## 과거 adjust1 실행 경로 (2026-10-20, 현행 research_v1과 구분)
 
 새 캠페인의 실행 절차와 검증 범위는 [adjust1.md](adjust1.md)를 따른다.
 이번 전처리 수정의 검증 결과는 [preprocessing_v2_validation.md](reports/preprocessing_v2_validation.md)에 기록했다.
@@ -31,7 +43,7 @@
 
 01~04의 초기값 `EXECUTE=False`는 계획 모드다. 단순 Run All로 장기 학습이나 export를 시작하지 않는다. 실제 실행하려면 해당 첫 셀에서 True로 바꾸고 순서대로 실행한다. 수정된 Python 모듈을 쓰는 다음 단계는 새 커널에서 실행한다. 실행 중인 02 커널은 재시작하지 않고 완료까지 유지한다.
 
-## CosFace 추가 후 실행 (2026-10-13)
+## 과거 CosFace 추가 이력 (2026-10-13, 아래 자동 덮어쓰기 동작은 폐기됨)
 
 - 현재 02는 기존 ArcFace 공통 부모 하나를 계속 학습한다. 00·02 노트북, 저장된 `notebook_settings.json`, 실행 중 request, trainer·backbone·기존 head 계산은 이 변경의 대상이 아니다.
 - 02 완료 후 **03을 별도 새 커널**에서 열고 첫 셀부터 실행한다. `HEADS`는 네 head를 명시하므로 과거 00에 저장된 세-head 목록을 덮어쓴다. 이번 추가만을 위해 00/01/02를 재실행할 필요는 없다. 기본 `EXECUTE=False`에서 40개 계획을 먼저 확인한다.

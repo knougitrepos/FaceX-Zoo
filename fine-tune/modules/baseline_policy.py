@@ -14,8 +14,9 @@ def code_fingerprints():
     root = Path(__file__).resolve().parents[2]
     paths = ["fine-tune/modules/" + name + ".py" for name in (
         "target_margin", "baseline_policy", "alignment", "model_builder",
-        "dataset", "input_pipeline", "trainer", "checkpoint_manager", "notebook_workflow")]
-    paths += ["backbone/MobileFaceNets.py", "head/ArcFace.py", "head/MagFace.py",
+        "dataset", "input_pipeline", "trainer", "checkpoint_manager", "notebook_workflow",
+        "backbone_factory", "finetune_protocol", "research_protocol")]
+    paths += ["backbone/MobileFaceNets.py", "backbone/ResNets.py", "head/ArcFace.py", "head/MagFace.py",
               "head/AdaFace.py", "head/AM_Softmax.py"]
     return {p: hashlib.sha256((root / p).read_bytes()).hexdigest() for p in paths}
 

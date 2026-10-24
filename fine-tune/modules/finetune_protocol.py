@@ -58,6 +58,9 @@ def canonical_identity(row, name, training):
 
 
 def prepare_protocol(profile):
+    if profile.get("split_policy") == "facex_ronbun_v1":
+        from .research_protocol import prepare_research_protocol
+        return prepare_research_protocol(profile)
     name = profile["name"]
     expected_classes, expected_images = PAPER_SPLITS[name]
     if not profile.get("enabled", True):
@@ -147,6 +150,9 @@ def prepare_protocol(profile):
 
 
 def verify_protocol(profile):
+    if profile.get("split_policy") == "facex_ronbun_v1":
+        from .research_protocol import verify_research_protocol
+        return verify_research_protocol(profile)
     if not profile.get("enabled", True):
         raise ValueError(f"{profile['name']} training disabled")
     record = json.loads(Path(profile["protocol_record"]).read_text(encoding="utf-8"))
@@ -169,13 +175,39 @@ def verify_protocol(profile):
 
 
 def prepare_selected_protocols(cfg, audit_workers=4):
-    """Register both local official releases, never carve FIQA fit out of FR train."""
+    """Prepare selected training protocols and publish explicit export provenance."""
     from .local_datasets import prepare_local_release
     results = []
     for name in cfg["campaign"]["finetune_datasets"]:
         profile = cfg["finetune_profiles"][name]
         if not profile.get("enabled", True):raise ValueError(f"{name} training disabled")
-        if profile.get("local_audit_required"):
+        if profile.get("local_audit_required") and profile.get("split_policy") != "facex_ronbun_v1":
             prepare_local_release(profile,workers=audit_workers)
         results.append(prepare_protocol(profile))
+    research = [p for p in cfg["finetune_profiles"].values()
+                if p.get("split_policy") == "facex_ronbun_v1" and Path(p["protocol_record"]).is_file()]
+    if research:
+        from .research_protocol import publish_handoff
+        index = publish_handoff(research, cfg["campaign"].get("handoff_path"))
+        cfg["campaign"]["handoff_path"] = str(index)
+        results = [{**record, "handoff_path": str(index)} for record in results]
     return results
+
+
+def research_profiles(root, *, ronbun_root="C:/ronbun"):
+    """Explicit opt-in namespace; preserve historical full-training profiles."""
+    root = Path(root)
+    profiles = default_profiles(root)
+    for name, p in profiles.items():
+        source = root / "fine-tune/data/protocols/local_qmul_v1" / name
+        p.update(split_policy="facex_ronbun_v1", enabled=True, local_audit_required=False,
+                 split_seed=8972, source_training_manifest=str(source / "training_manifest.csv"),
+                 source_evaluation_manifest=str(source / "evaluation_manifest.csv"),
+                 research_output=str(root / "fine-tune/data/protocols/research_v1" / name))
+        pending = Path(p["research_output"]) / "UNPREPARED"
+        p.update(protocol_record=str(pending / "protocol.json"), train_list=str(pending / "train_list.txt"),
+                 training_manifest=str(pending / "roles.csv"), evaluation_manifest=str(pending / "roles.csv"))
+    profiles["scface"]["raw_root"] = str(root / "SCface_database")
+    profiles["survface"]["split_reference"] = str(Path(ronbun_root) / "data/interim/survface/training_manifest.csv")
+    profiles["survface"].update(num_classes=4255, expected_images=176205)
+    return profiles

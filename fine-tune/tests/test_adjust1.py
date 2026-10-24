@@ -168,7 +168,7 @@ def test_notebook_plan_execution_isolated_settings(name, tmp_path, monkeypatch):
     for cell in nb["cells"]:
         if cell["cell_type"] == "code":
             source = "".join(cell["source"]).replace(
-                'SETTINGS_PATH = BASE_DIR / "fine-tune/data/adjust1/notebook_settings_v2.json"',
+                'SETTINGS_PATH = BASE_DIR / "fine-tune/data/research_v1/notebook_settings_mobilefacenet.json"',
                 f"SETTINGS_PATH = Path({str(path)!r})")
             exec(compile(source, name, "exec"), namespace)
     assert namespace["settings"]["parent_head"]["margin_arc"] == .35

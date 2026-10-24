@@ -30,6 +30,7 @@ from .checkpoint_manager import (
 from .dataset import VGGFace2ArchiveInspector, build_dataloader, validate_dataset_files, resolve_image_path
 from .model_builder import build_model
 from .trainer import Trainer, set_seed, TrainingStopped
+from .backbone_factory import backbone_slug
 from .finetune_protocol import default_profiles, verify_protocol
 from .baseline_policy import VERSION, DEFAULT_AUGMENTATION, validate_augmentation, code_fingerprints
 from .alignment import bind_aligned_dataset
@@ -90,6 +91,10 @@ def resolve_settings(base_dir, settings_path=None, overrides=None, require_saved
     elif require_saved:
         raise FileNotFoundError(f"Run notebook 00 to save settings first: {settings_path}")
     cfg = merge_settings(cfg, overrides or {})
+    if cfg["backbone"]["type"] in ("Resnet", "ResNet"):
+        cfg["backbone"]["type"] = "Resnet"
+        cfg["backbone"].setdefault("num_layers", 50)
+        cfg["backbone"].setdefault("mode", "ir")
     validate_settings(cfg)
     return cfg
 
@@ -140,8 +145,8 @@ def validate_settings(cfg):
         raise ValueError("SCFace/unavailable dataset training disabled until acquisition and protocol verification")
     if list(cfg["dataset"]["input_size"]) != [112, 112]:
         raise ValueError("Current MobileFaceNet/export architecture requires INPUT_SIZE=(112,112).")
-    if cfg["backbone"]["type"] != "MobileFaceNet" or (cfg["backbone"]["out_h"], cfg["backbone"]["out_w"]) != (7, 7):
-        raise ValueError("This notebook workflow supports MobileFaceNet with out_h=out_w=7.")
+    if cfg["backbone"]["type"] not in ("MobileFaceNet", "Resnet", "ResNet") or (cfg["backbone"]["out_h"], cfg["backbone"]["out_w"]) != (7, 7):
+        raise ValueError("Use MobileFaceNet or FaceX Resnet with out_h=out_w=7.")
     if cfg["training"]["batch_size"] < 2:
         raise ValueError("BATCH_SIZE must be >= 2 for training BatchNorm.")
     if cfg["training"]["epoches"] < 1 or cfg["training"]["save_freq"] < 1:
@@ -349,8 +354,8 @@ def checkpoint_path(cfg, stage, head, seed, dataset=None):
     prefix = f"{stage}_{dataset or cfg['dataset']['name']}_{head}" if stage != "pretrain" else f"{stage}_{head}"
     run_dir = Path(cfg["paths"]["checkpoint_dir"]) / f"{prefix}_seed{seed}"
     dim = cfg["backbone"]["feat_dim"]
-    filename = (f"pretrain_mobilefacenet_{dim}d.pt" if stage == "pretrain" else
-                f"finetune_mobilefacenet_{dim}d_{head}_epoch_{cfg['training']['epoches']}.pt")
+    filename = (f"pretrain_{backbone_slug(cfg['backbone'])}_{dim}d.pt" if stage == "pretrain" else
+                f"finetune_{backbone_slug(cfg['backbone'])}_{dim}d_{head}_epoch_{cfg['training']['epoches']}.pt")
     return run_dir / filename
 
 
@@ -366,6 +371,9 @@ def validate_paper_parameters(cfg):
     """Protect the low-resolution baseline recipe while tuning execution settings."""
     required = {"optimizer": "adam", "lr": 0.001, "epoches": 40, "batch_size": 64,
                 "milestones": [10, 20, 30], "lr_decay_ratio": 0.1}
+    if cfg["backbone"]["type"] == "Resnet":
+        # Explicit hardware-dependent batch choice; recorded in source_config.
+        required.pop("batch_size")
     for key, value in required.items():
         if cfg["training"][key] != value:
             raise ValueError(f"Paper baseline requires training.{key}={value!r}")
@@ -440,8 +448,8 @@ def _run_one(cfg, row, resume_path=None, smoke=False):
             parent_cfg = parent.get("config", {})
             if parent_cfg.get("dataset", {}).get("name") != "VGGFace2":
                 raise ValueError("Common parent must declare VGGFace2 pretraining")
-            for key in ("feat_dim", "dropout_rate"):
-                if parent_cfg.get("backbone", {}).get(key) != cfg["backbone"][key]:
+            for key in ("type", "feat_dim", "dropout_rate", "num_layers", "mode"):
+                if parent_cfg.get("backbone", {}).get(key) != cfg["backbone"].get(key):
                     raise ValueError(f"Common parent backbone.{key} differs")
             if parent_cfg.get("baseline_version") != VERSION or parent_cfg.get("head", {}).get("numerical_policy") != "target_only_original_sqrt_v1":
                 raise ValueError("Common parent must be trained under adjust1/A policy")
@@ -498,7 +506,7 @@ def _run_one(cfg, row, resume_path=None, smoke=False):
                 # Preserve the original selection/retention settings and record this attempt separately.
                 snapshot = run_dir / f"resume_settings_{uuid.uuid4().hex}.json"
             write_json(snapshot, cfg, immutable=True)
-            prefix = f"{stage}_mobilefacenet_{cfg['backbone']['feat_dim']}d" + (f"_{head}" if stage == "finetune" else "")
+            prefix = f"{stage}_{backbone_slug(cfg['backbone'])}_{cfg['backbone']['feat_dim']}d" + (f"_{head}" if stage == "finetune" else "")
             trainer.train(start_epoch=start, model_prefix=prefix)
             trainer.save_state_checkpoint(final_path.name, epoch=trainer.cur_epoch,
                                           extra_meta={"execution_settings": cfg})
@@ -596,7 +604,7 @@ def _export_one(cfg, row):
         raise ValueError("Export settings differ from trained checkpoint: " + "; ".join(differences))
     dim = stored["backbone"]["feat_dim"]
     out_dir = Path(cfg["paths"]["export_dir"]) / row["run_id"]
-    filename = f"exported_mobilefacenet_{dim}d_{head}_seed{seed}.pt"
+    filename = f"exported_{backbone_slug(stored['backbone'])}_{dim}d_{head}_seed{seed}.pt"
     out = out_dir / filename
     metadata_path = out.with_name(out.stem + "_meta.json")
     if out.exists():

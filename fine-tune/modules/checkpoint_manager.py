@@ -281,6 +281,8 @@ def extract_model_config(model: nn.Module) -> Dict[str, Any]:
     feat_dim = None
     if hasattr(backbone, "linear") and hasattr(backbone.linear, "out_features"):
         feat_dim = int(backbone.linear.out_features)
+    elif hasattr(backbone, "output_layer"):
+        feat_dim = int(backbone.output_layer[3].out_features)
     elif hasattr(backbone, "embedding_size"):
         feat_dim = int(backbone.embedding_size)
 
@@ -297,6 +299,10 @@ def extract_model_config(model: nn.Module) -> Dict[str, Any]:
         config["backbone"]["out_h"] = int(out_h)
     if out_w is not None:
         config["backbone"]["out_w"] = int(out_w)
+
+    for key in ("num_layers", "mode"):
+        if hasattr(backbone, key):
+            config["backbone"][key] = getattr(backbone, key)
 
     # Head attributes
     head = getattr(raw_model, "head", None)
@@ -480,6 +486,9 @@ def extract_train_config(
             "alignment_manifest_sha256": ds_cfg.get("alignment_manifest_sha256"),
             "alignment_report_sha256": ds_cfg.get("alignment_report_sha256"),
         }
+        for key in ("role_manifest_sha256", "training_identity_sha256", "shared_protocol_sha256"):
+            if key in ds_cfg:
+                train_part["dataset"][key] = ds_cfg[key]
 
     # 2. Training & optimization
     train_cfg = cfg.get("training", {})
@@ -650,7 +659,7 @@ def compare_configs(
     # 1. Backbone comparison
     ckpt_bb = ckpt_cfg.get("backbone", {})
     curr_bb = current_cfg.get("backbone", {})
-    for key in ["type", "feat_dim", "dropout_rate", "out_h", "out_w"]:
+    for key in ["type", "feat_dim", "dropout_rate", "out_h", "out_w", "num_layers", "mode"]:
         if full_strict:
             if key in ckpt_bb or key in curr_bb:
                 _diff_val(f"Backbone {key}", ckpt_bb.get(key), curr_bb.get(key))
@@ -692,7 +701,7 @@ def compare_configs(
             _diff_val(f"Dataset {key}", ckpt_ds.get(key), curr_ds.get(key))
         for key in ["data_root", "raw_root", "train_list", "val_list"]:
             _diff_path(f"Dataset {key}", ckpt_ds.get(key), curr_ds.get(key))
-        for key in ["train_list_hash", "val_list_hash"]:
+        for key in ["train_list_hash", "val_list_hash", "role_manifest_sha256", "training_identity_sha256", "shared_protocol_sha256"]:
             _diff_val(f"Dataset {key}", ckpt_ds.get(key), curr_ds.get(key))
     else:
         for key in ["name", "num_classes"]:
@@ -1168,19 +1177,15 @@ class CheckpointManager:
             # 1. Save to temporary file first
             torch.save({"state_dict": clean_weights, "metadata": metadata}, tmp_export_pt)
 
-            # 2. Strict loading verification with standalone MobileFaceNet
+            # Validate the declared backbone, including Resnet depth/mode.
             try:
-                from backbone.MobileFaceNets import MobileFaceNet
+                from .backbone_factory import build_backbone
             except ImportError:
-                from ..backbone.MobileFaceNets import MobileFaceNet
-
-            validator_model = MobileFaceNet(
-                embedding_size=target_feat_dim,
-                out_h=7,
-                out_w=7,
-                dropout_rate=0.0,
-            )
-            # Must strictly match MobileFaceNet keys (no missing, no unexpected)
+                from backbone_factory import build_backbone
+            bb_config = dict(metadata.get("source_config", {}).get("backbone", {}))
+            bb_config.setdefault("type", "MobileFaceNet")
+            bb_config.update(feat_dim=target_feat_dim, dropout_rate=0.0)
+            validator_model = build_backbone(bb_config)
             validator_model.load_state_dict(clean_weights, strict=True)
             validator_model.eval()
 

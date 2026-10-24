@@ -17,3 +17,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ipynb_checkpoints/
+
+/SCface_database/
+/fine-tune/data/research_v1/
+/fine-tune/data/protocols/research_v1/

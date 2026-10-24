@@ -65,7 +65,8 @@ def test_cosface_margin_is_hashed_and_compared():
 @pytest.mark.parametrize("name,stage", [
     ("03_finetune.ipynb", "finetune"), ("04_export_and_validate.ipynb", "export"),
 ])
-def test_notebook_adds_cosface_over_three_head_adjust1_settings(name, stage, tmp_path, monkeypatch):
+@pytest.mark.parametrize("heads", [["arcface"], ["arcface", "adaface", "magface"], ["cosface"]])
+def test_notebook_preserves_explicit_saved_heads(name, stage, heads, tmp_path, monkeypatch):
     # Do not mutate the user's saved settings or launch any training/audit/export.
     from modules import process_runner, finetune_protocol
     def forbidden(*args, **kwargs):
@@ -73,7 +74,7 @@ def test_notebook_adds_cosface_over_three_head_adjust1_settings(name, stage, tmp
     monkeypatch.setattr(process_runner, "launch_campaign", forbidden)
     monkeypatch.setattr(finetune_protocol, "prepare_selected_protocols", forbidden)
     saved = flow.resolve_settings(ROOT)
-    saved["campaign"]["heads"] = ["arcface", "adaface", "magface"]
+    saved["campaign"]["heads"] = heads
     saved["heads"].pop("cosface")
     saved_path = tmp_path / "legacy_settings.json"
     flow.save_settings(saved_path, saved)
@@ -84,13 +85,13 @@ def test_notebook_adds_cosface_over_three_head_adjust1_settings(name, stage, tmp
         if cell["cell_type"] != "code":
             continue
         source = "".join(cell["source"]).replace(
-            'SETTINGS_PATH = BASE_DIR / "fine-tune/data/adjust1/notebook_settings_v2.json"',
+            'SETTINGS_PATH = BASE_DIR / "fine-tune/data/research_v1/notebook_settings_mobilefacenet.json"',
             f"SETTINGS_PATH = Path({str(saved_path)!r})",
         )
         exec(compile(source, name, "exec"), namespace)
     assert namespace["EXECUTE"] is False
-    assert len(namespace["plan"]) == 40
-    assert {row["head"] for row in namespace["plan"]} == set(flow.HEAD_NAMES)
+    assert len(namespace["plan"]) == len(heads) * len(saved["project"]["seed_list"]) * len(saved["campaign"]["finetune_datasets"])
+    assert {row["head"] for row in namespace["plan"]} == set(heads)
     assert {row["stage"] for row in namespace["plan"]} == {stage}
     assert namespace["settings"]["heads"]["cosface"]["margin"] == 0.3
     assert namespace["settings"]["heads"]["cosface"]["scale"] == 64.0

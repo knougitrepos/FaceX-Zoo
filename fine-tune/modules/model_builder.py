@@ -99,16 +99,11 @@ def build_model(
     dropout_rate = float(backbone_conf.get("dropout_rate", 0.6))
 
     backbone_type = backbone_conf.get("type", "MobileFaceNet")
-    if backbone_type == "MobileFaceNet":
-        backbone = MobileFaceNet(
-            embedding_size=feat_dim,
-            out_h=out_h,
-            out_w=out_w,
-            dropout_rate=dropout_rate,
-        )
-    else:
-        logger.error(f"Unsupported backbone type: {backbone_type}. Supported: 'MobileFaceNet'")
-        raise ValueError(f"Unsupported backbone type: {backbone_type}")
+    try:
+        from .backbone_factory import build_backbone
+    except ImportError:  # Historical direct-script imports under fine-tune/modules.
+        from backbone_factory import build_backbone
+    backbone = build_backbone(backbone_conf)
 
     head_type = head_conf.get("type", "ArcFace")
     num_class = int(head_conf.get("num_class", 8631))
