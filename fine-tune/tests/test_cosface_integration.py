@@ -84,12 +84,13 @@ def test_notebook_preserves_explicit_saved_heads(name, stage, heads, tmp_path, m
     for cell in notebook["cells"]:
         if cell["cell_type"] != "code":
             continue
-        source = "".join(cell["source"]).replace(
-            'SETTINGS_PATH = BASE_DIR / "fine-tune/data/research_v1/notebook_settings_mobilefacenet.json"',
-            f"SETTINGS_PATH = Path({str(saved_path)!r})",
-        )
+        import re
+        source = re.sub(r'^SETTINGS_PATH = .*$',
+                        lambda _: f"SETTINGS_PATH = Path({str(saved_path)!r})",
+                        "".join(cell["source"]), flags=re.MULTILINE)
         exec(compile(source, name, "exec"), namespace)
     assert namespace["EXECUTE"] is False
+    assert namespace["SETTINGS_PATH"] == saved_path
     assert len(namespace["plan"]) == len(heads) * len(saved["project"]["seed_list"]) * len(saved["campaign"]["finetune_datasets"])
     assert {row["head"] for row in namespace["plan"]} == set(heads)
     assert {row["stage"] for row in namespace["plan"]} == {stage}
@@ -99,3 +100,29 @@ def test_notebook_preserves_explicit_saved_heads(name, stage, heads, tmp_path, m
     legacy = flow.resolve_settings(ROOT, saved_path)
     assert legacy["campaign"]["heads"] == saved["campaign"]["heads"]
     assert flow.plan_matrix(legacy, "pretrain") == flow.plan_matrix(namespace["settings"], "pretrain")
+
+
+def test_new_campaign_notebooks_run_sequentially_with_fresh_namespaces(tmp_path, monkeypatch):
+    import re
+    from modules import process_runner, finetune_protocol
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Plan execution must not start a campaign or prepare datasets")
+    monkeypatch.setattr(process_runner, "launch_campaign", forbidden)
+    monkeypatch.setattr(finetune_protocol, "prepare_selected_protocols", forbidden)
+    saved_path = tmp_path / "new_settings.json"
+    for path in sorted((ROOT / "fine-tune/notebooks").glob("[0-9][0-9]_*.ipynb")):
+        namespace = {}
+        notebook = json.loads(path.read_text(encoding="utf-8"))
+        for cell in notebook["cells"]:
+            if cell["cell_type"] != "code":
+                continue
+            source = re.sub(r'^SETTINGS_PATH = .*$', lambda _: f"SETTINGS_PATH = Path({str(saved_path)!r})",
+                            "".join(cell["source"]), flags=re.MULTILINE)
+            exec(compile(source, str(path), "exec"), namespace)
+        assert namespace["SETTINGS_PATH"] == saved_path
+        if "EXECUTE" in namespace:
+            assert namespace["EXECUTE"] is False
+    saved = flow.resolve_settings(ROOT, saved_path)
+    assert saved["data_integrity"]["mode"] == "content_verified_reuse"
+    assert saved["campaign"]["finetune_datasets"] == ["survface", "tinyface", "scface"]
+    assert "research_v2_boundary" in saved["paths"]["checkpoint_dir"]

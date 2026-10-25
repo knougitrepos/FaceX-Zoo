@@ -173,6 +173,9 @@ def test_real_small_image_matrix_and_export(aligned_cfg, monkeypatch):
             checkpoint = load_checkpoint(row["checkpoint"])
             assert checkpoint["config"]["preprocessing"]["pixel_std"] == 255
             assert checkpoint["extra_meta"]["execution_settings"]["project"]["keep_raw_results"] is False
+            verification = checkpoint["extra_meta"]["execution_settings"]["data_integrity_verification"]
+            assert verification["mode"] == "content_verified_reuse"
+            assert verification["image_hashes_checked"] > 0 and verification["receipt_sha256"]
         again = flow.run_training_matrix(cfg, "finetune")
         assert all(r["status"] == "reused_completed" for r in again)
         assert [r["sha256"] for r in again] == [r["sha256"] for r in runs]
@@ -185,6 +188,12 @@ def test_real_small_image_matrix_and_export(aligned_cfg, monkeypatch):
             assert meta["preprocessing"]["alignment"] == "resize_only"
             assert meta["preprocessing"]["alignment_policy"]["interpolation"] == "bicubic"
             assert meta["fiqa_evaluation"] == "not_executed"
+            from modules.target_margin import NUMERICAL_POLICY
+            assert meta["training_numerics"]["version"] == NUMERICAL_POLICY
+            assert meta["export_data_verification"]["reused_decode_receipt"]
+            assert meta["export_data_verification"]["images_decoded"] == 0
+            if out["head"] in ("arcface", "magface"):
+                assert meta["source_config"]["head"]["numerical_policy"] == NUMERICAL_POLICY
             if out["head"] == "cosface":
                 assert meta["source_config"]["head"]["type"] == "AM_Softmax"
                 assert meta["source_config"]["head"]["margin"] == 0.3

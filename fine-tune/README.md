@@ -1,18 +1,22 @@
 > 현재 순차 노트북의 연구 분할·1024D 연결은 [RESEARCH_HANDOFF.md](RESEARCH_HANDOFF.md)를 먼저 따른다.
-> SurvFace·TinyFace·SCFace 파인튜닝과 ronbun 연계는 새 research_v1 namespace를 사용한다.
+> SurvFace·TinyFace·SCFace 파인튜닝은 새 research_v2_boundary namespace를 사용한다.
 > 아래 adjust1 전체 학습 기록·경로는 해당 과거 campaign의 출처로 보존한다.
 
-현재 `research_v1` 노트북의 00은 기본 네 head와 SurvFace·TinyFace·SCFace를 선택한다.
+현재 `research_v2_boundary` 노트북의 00은 기본 네 head와 SurvFace·TinyFace·SCFace를 선택한다.
 01~04는 같은 `SETTINGS_PATH`를 사용하며, 03/04의 HEADS와 head 파라미터도 저장값을 이어받는다.
 특정 head만 선택했다면 후속 단계에서 다른 head를 자동 추가하지 않는다.
 새 namespace는 00 설정 저장 → 01 부모 입력 준비 → 02 완료 부모 → 03 후속 학습 → 04 export 순서다.
 과거의 “00·02 재실행 불필요” 안내는 동일 조건의 검증된 완료 부모가 있는 과거 캠페인에만 해당한다.
 SurvFace FR 학습은 현재 4,255명/176,205장이고 SCFace 50명/800장도 활성화되어 있다.
 실제 작업 수는 저장한 데이터셋 수 × head 수 × seed 수로 계획표에서 확인한다.
+새 ArcFace·MagFace run은 target-only FP32 계산과 정확한 zero-radicand에만 eps safeguard를 적용한다.
+MagFace norm/margin gradient와 비유한 값 중단을 유지하며, 구 정책 checkpoint를 새 run으로 재개하지 않는다.
+`DATA_INTEGRITY_MODE="content_verified_reuse"`는 최초 전수 hash/decode 성공 뒤에도 매번 원본·준비 이미지
+바이트 hash를 대조하고, 동일 검증 계약에서 decode만 재사용한다. `full`은 decode까지 매번 수행한다.
 
 # FaceX-Zoo 노트북 실행 안내
 
-## 과거 adjust1 실행 경로 (2026-10-20, 현행 research_v1과 구분)
+## 과거 adjust1 실행 경로 (2026-10-20, 현행 research_v2_boundary와 구분)
 
 새 캠페인의 실행 절차와 검증 범위는 [adjust1.md](adjust1.md)를 따른다.
 이번 전처리 수정의 검증 결과는 [preprocessing_v2_validation.md](reports/preprocessing_v2_validation.md)에 기록했다.

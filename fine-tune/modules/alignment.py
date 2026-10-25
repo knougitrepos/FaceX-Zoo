@@ -245,7 +245,8 @@ def prepare_alignment(source_list, raw_root, output_dir, aligner, max_images=Non
     return report
 
 
-def verify_alignment(report_path, source_list, expected_policy, verify_images=True):
+def verify_alignment(report_path, source_list, expected_policy, verify_images=True, *,
+                     integrity_mode="full", cache_dir=None):
     """Check ordering, labels, complete coverage, provenance and image hashes."""
     from .dataset import resolve_image_path
     report = json.loads(Path(report_path).read_text(encoding="utf-8"))
@@ -258,6 +259,15 @@ def verify_alignment(report_path, source_list, expected_policy, verify_images=Tr
     for key in ("manifest", "train_list"):
         if sha256(report[key]) != report[key + "_sha256"]:
             raise ValueError(f"Alignment {key} hash mismatch")
+    from .integrity_cache import MODES, receipt_contract, load_receipt, verify_image, publish_receipt
+    if integrity_mode not in MODES:
+        raise ValueError("Unknown image integrity mode")
+    contract, receipt, reused = None, None, False
+    if verify_images and integrity_mode == "content_verified_reuse":
+        if cache_dir is None:
+            raise ValueError("Conditional image verification requires a cache directory")
+        contract = receipt_contract(report_path, report, expected_policy)
+        receipt, reused = load_receipt(cache_dir, contract)
     count = 0
     with Path(report["manifest"]).open(encoding="utf-8") as manifest:
         for original, aligned, record in itertools.zip_longest(read_rows(source_list), read_rows(report["train_list"]), manifest):
@@ -270,14 +280,19 @@ def verify_alignment(report_path, source_list, expected_policy, verify_images=Tr
                 Path(row["source"]).resolve() != source or Path(row["output"]).resolve() != Path(aligned[0]).resolve()):
                 raise ValueError("Alignment image/identity mapping differs")
             if verify_images:
-                if sha256(source) != row["source_sha256"] or sha256(row["output"]) != row["output_sha256"]:
-                    raise ValueError("Aligned/source image hash mismatch")
-                image = cv2.imread(row["output"], cv2.IMREAD_COLOR)
-                if image is None or image.shape != (112, 112, 3):
-                    raise ValueError("Invalid aligned image")
+                verify_image(source, row["source_sha256"], decode=not reused)
+                verify_image(row["output"], row["output_sha256"], decode=not reused, prepared=True)
             count += 1
     if count != report["total"]:
         raise ValueError("Alignment count differs")
+    if receipt is not None and not reused:
+        publish_receipt(receipt, contract, count)
+    report["verification"] = dict(mode=integrity_mode if verify_images else "mapping_only",
+        image_hashes_checked=count * 2 if verify_images else 0,
+        images_decoded=count * 2 if verify_images and not reused else 0,
+        reused_decode_receipt=reused, receipt_path=str(receipt) if receipt else None,
+        receipt_sha256=sha256(receipt) if receipt else None,
+        limitation="pre-use byte verification; dataset must not change during the run")
     return report
 
 
@@ -287,11 +302,15 @@ def bind_aligned_dataset(cfg, verify_images=True):
     selected = copy.deepcopy(cfg)
     ds = selected["dataset"]
     policy = alignment_policy(Path(__file__).resolve().parents[2], selected["alignment"], ds["name"])
-    report = verify_alignment(ds["alignment_report"], ds["train_list"], policy, verify_images)
+    integrity = selected.get("data_integrity", {"mode": "content_verified_reuse"})
+    cache_dir = integrity.get("cache_dir") or str(Path(ds["alignment_report"]).parent / "verification_cache")
+    report = verify_alignment(ds["alignment_report"], ds["train_list"], policy, verify_images,
+                              integrity_mode=integrity["mode"], cache_dir=cache_dir)
     if Path(report["raw_root"]).resolve() != Path(ds["raw_root"]).resolve():
         raise ValueError("Alignment raw dataset root differs")
     ds.update(source_train_list=ds["train_list"], train_list=report["train_list"],
               data_root=str(Path(report["train_list"]).parent), alignment=("resize_only" if policy.get("method") == "resize_only" else policy["version"]),
               alignment_policy=policy, alignment_manifest_sha256=report["manifest_sha256"],
               alignment_report_sha256=sha256(ds["alignment_report"]))
+    selected["data_integrity_verification"] = report["verification"]
     return selected

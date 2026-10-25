@@ -52,12 +52,19 @@ class NonFiniteTrainingError(RuntimeError):
     """A non-finite loss or gradient blocked an optimizer update."""
 
 
+try:
+    from .target_margin import NUMERICAL_POLICY, BOUNDARY_EPS
+except ImportError:  # Historical direct-script imports.
+    from modules.target_margin import NUMERICAL_POLICY, BOUNDARY_EPS
+
 TRAINING_NUMERICS = {
-    "version": "target_only_original_sqrt_v1",
-    "arcface_sqrt_floor": None,
-    "magface_sqrt_floor": None,
+    "version": NUMERICAL_POLICY,
+    "arcface_sqrt_floor": "zero_radicand_only",
+    "magface_sqrt_floor": "zero_radicand_only",
+    "margin_dtype": "float32",
+    "boundary_epsilon": BOUNDARY_EPS,
     "margin_scope": "target_class_only",
-    "target_boundary": "singular; reject nonfinite gradients before update",
+    "target_boundary": "where(1-c*c == 0, fp32_eps, 1-c*c) before sqrt",
     "loss_check": "every_batch_before_backward",
     "gradient_check": "every_batch_before_optimizer_step_inf_norm_no_clipping",
     "on_nonfinite": "abort_without_saving_current_state",

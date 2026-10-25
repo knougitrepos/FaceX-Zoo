@@ -8,8 +8,8 @@ export와 sidecar, 명시적 데이터 분할 기록만 전달한다. split_refe
 다른 위치에 복사한 파일로 설정할 수 있다. ronbun의 Python 실행 환경을 학습에 요구하지 않는다.
 
 00 → 01 → 02 → 03 → 04 순서다. 00은 research_profiles(BASE_DIR)로 SurvFace/TinyFace/SCFace를
-모두 선택하며 새 research_v1_<backbone> checkpoint/log/export namespace를 사용한다.
-설정은 fine-tune/data/research_v1/notebook_settings_mobilefacenet.json에 저장한다.
+모두 선택하며 새 research_v2_boundary_<backbone> checkpoint/log/export namespace를 사용한다.
+설정은 fine-tune/data/research_v2_boundary/notebook_settings_mobilefacenet.json에 저장한다.
 Resnet을 선택할 때는5개 노트북의 SETTINGS_PATH를 같은 별도 파일로 바꾸고00의 BACKBONE을
 `dict(type="Resnet", num_layers=50, mode="ir", feat_dim=1024, out_h=7, out_w=7, dropout_rate=.6)`로 설정한다.
 부모 모델도 같은 backbone으로 생성한다. 1024D가 같다고 MobileFaceNet 부모를 Resnet에 로드하지 않는다.
@@ -46,8 +46,27 @@ export의 low-resolution resize 정책(bicubic/bilinear)은 ronbun이 파일에�
 00은 계획 설정만 저장한다. 03/04의 EXECUTE=False 기본값은 학습·export를 실행하지 않는다.
 03/04는 HEADS와 HEAD_PARAMETERS를 저장 설정에서 읽는다. 새 캠페인의 완료 부모와 후속 모델이
 없으면 이전 단계가 필요하다. 과거 CosFace 추가 시점의 자동 head 덮어쓰기 안내는 적용하지 않는다.
-매 학습·export 전 원본/전처리 이미지 hash와 decode 검증은 유지한다. 현재는 검증 생략 모드를
-추가하지 않았다. 반복 I/O를 줄이는 정책은 무결성 보장 범위가 달라지므로 별도로 결정해야 한다.
+00의 DATA_INTEGRITY_MODE 기본값은 content_verified_reuse다. 최초에는 원본/전처리 이미지의
+전수 SHA-256 및 decode를 수행한다. 이후에도 매번 현재 바이트의 SHA-256을 전수 대조하고,
+manifest·policy·검증 코드·OpenCV/NumPy 버전이 같을 때만 decode 결과를 재사용한다.
+크기/mtime만 보고 신뢰하지 않으며 hash I/O 자체를 제거하지 않는다. full은 매번 decode까지 수행한다.
+receipt는 각 전처리 report 옆 verification_cache/에 저장한다. 실패·부분 검증은 receipt를 게시하지 않는다.
+캐시 삭제 시 다음 실행에서 전수 검사한다. 변조 receipt나 이미지 변경은 중단한다. 의도적 데이터 교체는
+새 전처리 artifact를 생성한다. 검증 후 학습/export 동안에도 데이터 파일을 변경하지 않아야 한다.
+실행 설정/checkpoint/export metadata에 실제 hash/decode 수, 재사용 여부와 receipt hash를 남긴다.
+
+새 ArcFace parent와 모든 ArcFace/MagFace 후속 run에는 target_only_fp32_zero_radicand_eps_v1을
+처음부터 적용한다. FP32 feature/weight에서 cosine을 계산하고 정답에만 margin을 계산한다.
+1-c*c가 정확히0이면 FP32 epsilon으로 바꾼 후 sqrt를 계산한다. 일반 내부값과 MagFace adaptive-margin,
+norm 정규화 경로는 유지한다. 비유한 loss/gradient 중단 검사는 유지한다. CosFace/AdaFace 수식은 그대로다.
+이 정책은 로컬 수치 안정화이며 UCFace/FaceX-Zoo 저자 공식 수정 또는 동일 성능 보장이 아니다.
+기존 정책 parent/resume checkpoint는 새로운 정책 학습에 혼용하지 않는다. 기존 완료 artifact는 보존한다.
+
+연구 분할은 현행 고정 후보를 먼저 평가한다. 다음은 ronbun에서 명시적 완료 기준 report를 고정하여
+같은 checkpoint·codec의 fit/safety 표본 수를 분석하는 단계다. 최종 safety/test는 선택에 쓰지 않는다.
+FR/calibration 배분 변경은 필요성 검토 이후 별도 split_reference, protocol namespace와 후속 모델 재학습
+계획으로 진행한다. 부모 조건이 같다면 고정 부모를 재사용할 수 있다. 현재 코드가 자동으로 비율을
+탐색하거나 기존 역할을 변경하지 않는다.
 학습 이후04 export와 sidecar를 ronbun의 research.embeddings.facex_zoo로 등록하고
 ronbun YAML의 models에 정확한 spec을 지정한다. 4heads×2backbones의 producer/consumer 테스트는
 합성 가중치의 bounded 검증이며 인식 성능 또는 정식 학습 완료를 뜻하지 않는다.

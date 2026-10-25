@@ -34,6 +34,7 @@ from .backbone_factory import backbone_slug
 from .finetune_protocol import default_profiles, verify_protocol
 from .baseline_policy import VERSION, DEFAULT_AUGMENTATION, validate_augmentation, code_fingerprints
 from .alignment import bind_aligned_dataset
+from .target_margin import NUMERICAL_POLICY
 
 HEAD_NAMES = ("arcface", "adaface", "magface", "cosface")
 
@@ -65,6 +66,7 @@ def resolve_settings(base_dir, settings_path=None, overrides=None, require_saved
     cfg["training"].update(num_workers=4, prefetch_factor=4, persistent_workers=True,
                             torch_threads=2, recovery_minutes=10, loss_sync_batches=20)
     cfg["baseline_version"] = VERSION
+    cfg["data_integrity"] = {"mode": "content_verified_reuse"}
     cfg["parent_head"] = dict(type="ArcFace", margin_arc=0.35, margin_am=0.0, scale=32.0)
     cfg["augmentation"] = copy.deepcopy(DEFAULT_AUGMENTATION)
     cfg["alignment"] = {
@@ -100,6 +102,9 @@ def resolve_settings(base_dir, settings_path=None, overrides=None, require_saved
 
 
 def validate_settings(cfg):
+    from .integrity_cache import MODES
+    if cfg.get("data_integrity", {}).get("mode", "content_verified_reuse") not in MODES:
+        raise ValueError("data_integrity.mode must be content_verified_reuse or full")
     if cfg.get("baseline_version") != VERSION:
         raise ValueError("Unsupported baseline_version")
     preprocessing = cfg["alignment"]
@@ -451,8 +456,8 @@ def _run_one(cfg, row, resume_path=None, smoke=False):
             for key in ("type", "feat_dim", "dropout_rate", "num_layers", "mode"):
                 if parent_cfg.get("backbone", {}).get(key) != cfg["backbone"].get(key):
                     raise ValueError(f"Common parent backbone.{key} differs")
-            if parent_cfg.get("baseline_version") != VERSION or parent_cfg.get("head", {}).get("numerical_policy") != "target_only_original_sqrt_v1":
-                raise ValueError("Common parent must be trained under adjust1/A policy")
+            if parent_cfg.get("baseline_version") != VERSION or parent_cfg.get("head", {}).get("numerical_policy") != NUMERICAL_POLICY:
+                raise ValueError("Common parent must be trained from the start under the current FP32 boundary policy")
             if parent_cfg.get("code_fingerprints") != code_fingerprints():
                 raise ValueError("Common parent source code differs from the selected adjust1 implementation")
             for key in ("margin_arc", "margin_am", "scale"):
@@ -617,6 +622,8 @@ def _export_one(cfg, row):
                     "source_checkpoint": str(path), "source_sha256": source_hash,
                     "source_config": stored, "source_config_hash": payload["config_hash"],
                     "execution_settings": payload.get("extra_meta", {}).get("execution_settings"),
+                    "training_numerics": payload.get("extra_meta", {}).get("training_numerics"),
+                    "export_data_verification": selected.get("data_integrity_verification"),
                     "preprocessing": {**stored.get("preprocessing", {}), "color": "BGR"},
                     "parent_hash": payload.get("parent_hash"), "epochs": payload["epoch"],
                     "common_parent_seed": cfg["campaign"]["parent_seed"],
