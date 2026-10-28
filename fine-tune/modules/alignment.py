@@ -182,6 +182,12 @@ def create_preprocessor(base_dir, cfg, ds):
 
 
 def prepare_alignment(source_list, raw_root, output_dir, aligner, max_images=None):
+    from .shared_storage import artifact_lock
+    with artifact_lock(output_dir):
+        return _prepare_alignment(source_list, raw_root, output_dir, aligner, max_images)
+
+
+def _prepare_alignment(source_list, raw_root, output_dir, aligner, max_images=None):
     """Stream PNGs and a JSONL manifest; refuse overwrites of previous attempts.
 
     A bounded audit is explicitly partial. Retry failures using a new output
@@ -241,7 +247,16 @@ def prepare_alignment(source_list, raw_root, output_dir, aligner, max_images=Non
               "source_list": str(source_list), "source_list_sha256": source_hash,
               "raw_root": str(root), "manifest": str(manifest), "manifest_sha256": sha256(manifest),
               "train_list": str(target_list), "train_list_sha256": sha256(target_list)}
+    from .shared_storage import write_derivation
+    report["storage_schema"] = "shared-preprocessing-v1"
+    write_derivation(out, "image_preprocessing", {"source_list": {"path":str(source_list), "sha256":source_hash},
+        "images": "Per-image source/output SHA-256 in manifest.jsonl"},
+        {"raw_root":str(root), "policy":aligner.policy, "max_images":max_images},
+        {k:report[k] for k in ("total","processed","prepared","failed")},
+        "completed" if report["completed"] else "partial_or_failed")
     (out / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if report["completed"]:
+        (out / "COMPLETED").touch()
     return report
 
 
@@ -250,6 +265,10 @@ def verify_alignment(report_path, source_list, expected_policy, verify_images=Tr
     """Check ordering, labels, complete coverage, provenance and image hashes."""
     from .dataset import resolve_image_path
     report = json.loads(Path(report_path).read_text(encoding="utf-8"))
+    if report.get("storage_schema"):
+        directory = Path(report_path).parent
+        if directory.with_name(directory.name + ".lock").exists() or not (directory / "COMPLETED").is_file():
+            raise ValueError("Alignment is still publishing or partial/failed")
     if not report.get("completed") or report["failed"] != 0 or report.get("prepared") != report["total"]:
         raise ValueError("Alignment is partial/failed; review failures before training")
     if report["policy"] != expected_policy:

@@ -102,9 +102,13 @@ def test_notebook_preserves_explicit_saved_heads(name, stage, heads, tmp_path, m
     assert flow.plan_matrix(legacy, "pretrain") == flow.plan_matrix(namespace["settings"], "pretrain")
 
 
-def test_new_campaign_notebooks_run_sequentially_with_fresh_namespaces(tmp_path, monkeypatch):
+def test_new_campaign_notebooks_run_sequentially_with_fresh_namespaces(tmp_path, monkeypatch, external_tree):
     import re
     from modules import process_runner, finetune_protocol
+    data, models = external_tree
+    monkeypatch.setenv("FACE_DATASET_ROOT", str(data))
+    monkeypatch.setenv("FACE_MODEL_ROOT", str(models))
+    monkeypatch.chdir(ROOT)
     def forbidden(*args, **kwargs):
         raise AssertionError("Plan execution must not start a campaign or prepare datasets")
     monkeypatch.setattr(process_runner, "launch_campaign", forbidden)
@@ -125,4 +129,5 @@ def test_new_campaign_notebooks_run_sequentially_with_fresh_namespaces(tmp_path,
     saved = flow.resolve_settings(ROOT, saved_path)
     assert saved["data_integrity"]["mode"] == "content_verified_reuse"
     assert saved["campaign"]["finetune_datasets"] == ["survface", "tinyface", "scface"]
-    assert "research_v2_boundary" in saved["paths"]["checkpoint_dir"]
+    assert "shared_v1_boundary" in saved["paths"]["checkpoint_dir"]
+    assert Path(saved["paths"]["checkpoint_dir"]).is_relative_to(models)

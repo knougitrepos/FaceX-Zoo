@@ -93,6 +93,12 @@ def resolve_settings(base_dir, settings_path=None, overrides=None, require_saved
     elif require_saved:
         raise FileNotFoundError(f"Run notebook 00 to save settings first: {settings_path}")
     cfg = merge_settings(cfg, overrides or {})
+    for profile in cfg["finetune_profiles"].values():
+        if profile.get("portable_protocol"):
+            # Deep merging old defaults must not retain inactive cross-repo
+            # dependencies in new checkpoint provenance.
+            for key in ("local_audit", "legacy_fiqa_manifest"):
+                profile.pop(key, None)
     if cfg["backbone"]["type"] in ("Resnet", "ResNet"):
         cfg["backbone"]["type"] = "Resnet"
         cfg["backbone"].setdefault("num_layers", 50)
@@ -198,7 +204,7 @@ def inspect_environment(base_dir, cfg):
     for key in ("train_archive", "test_archive", "meta_csv"):
         p = Path(ds[key])
         checks[key] = {"exists": p.is_file(), "bytes": p.stat().st_size if p.is_file() else None}
-    root = Path(ds["raw_root"])
+    root = Path(ds.get("metadata_root", ds["raw_root"]))
     checks["free_bytes"] = shutil.disk_usage(root).free if root.exists() else None
     try:
         ids = VGGFace2ArchiveInspector(str(root)).parse_identity_meta(train_only=True)
@@ -214,16 +220,35 @@ def inspect_environment(base_dir, cfg):
 
 
 def prepare_indices(cfg, val_every=None):
+    from .shared_storage import artifact_lock, write_derivation, sha
+    ds = cfg["dataset"]
+    with artifact_lock(ds["train_list"]):
+        result = _prepare_indices(cfg, val_every)
+        if ds.get("metadata_root"):
+            directory = Path(ds["train_list"]).parent
+            receipt = directory / "derivation.json"
+            if not receipt.exists():
+                root = Path(ds["metadata_root"])
+                source = next(p for p in (root / "meta/train_list.txt", root / "data/train_list.txt") if p.is_file())
+                write_derivation(directory, "official_training_index",
+                    {"train_list": {"path": str(source), "sha256": sha(source)},
+                     "identities": {"path": str(root / "meta/identity_meta.csv"), "sha256": sha(root / "meta/identity_meta.csv")}},
+                    {"num_classes": ds["num_classes"], "val_every": val_every, "image_root": ds["raw_root"]},
+                    result, "completed")
+        return result
+
+
+def _prepare_indices(cfg, val_every=None):
     """Full official training list by default. Explicit legacy splits are audit-only."""
     if val_every is None:
         ds = cfg["dataset"]
         if ds.get("val_list"):
             raise ValueError("Full training requires val_list=None")
-        ids = VGGFace2ArchiveInspector(ds["raw_root"]).parse_identity_meta(train_only=True)
+        ids = VGGFace2ArchiveInspector(ds.get("metadata_root", ds["raw_root"])).parse_identity_meta(train_only=True)
         if len(ids) != ds["num_classes"]:
             raise ValueError("Metadata class count differs from NUM_CLASSES")
         labels = {x["class_id"]: i for i, x in enumerate(ids)}
-        root = Path(ds["raw_root"])
+        root = Path(ds.get("metadata_root", ds["raw_root"]))
         source = next((p for p in (root / "meta/train_list.txt", root / "data/train_list.txt") if p.is_file()), None)
         if source is None:
             raise FileNotFoundError("Original VGGFace2 train_list.txt is missing")
@@ -259,11 +284,11 @@ def prepare_indices(cfg, val_every=None):
     if val_every < 2:
         raise ValueError("VAL_EVERY must be >= 2")
     ds = cfg["dataset"]
-    ids = VGGFace2ArchiveInspector(ds["raw_root"]).parse_identity_meta(train_only=True)
+    ids = VGGFace2ArchiveInspector(ds.get("metadata_root", ds["raw_root"])).parse_identity_meta(train_only=True)
     if len(ids) != ds["num_classes"]:
         raise ValueError("Metadata class count differs from NUM_CLASSES")
     labels = {x["class_id"]: i for i, x in enumerate(ids)}
-    root = Path(ds["raw_root"])
+    root = Path(ds.get("metadata_root", ds["raw_root"]))
     candidates = [root / "meta/train_list.txt", root / "data/train_list.txt"]
     source = next((p for p in candidates if p.is_file()), None)
     if source is None:

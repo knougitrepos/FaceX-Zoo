@@ -187,6 +187,19 @@ def prepare_selected_protocols(cfg, audit_workers=4):
     research = [p for p in cfg["finetune_profiles"].values()
                 if p.get("split_policy") == "facex_ronbun_v1" and Path(p["protocol_record"]).is_file()]
     if research:
+        if all(p.get("portable_protocol") for p in research):
+            # The migrated index is already immutable and verified; never
+            # overwrite it with machine-specific absolute paths.
+            index = Path(cfg["campaign"]["handoff_path"])
+            records = json.loads(index.read_text(encoding="utf-8"))
+            if records.get("schema") != "facex-ronbun-handoff-v2":
+                raise ValueError("Portable protocols require a v2 handoff")
+            for p in research:
+                item = records["protocols"][p["name"]]
+                if ((index.parent / item["path"]).resolve() != Path(p["protocol_record"]).resolve()
+                        or compute_sha256(p["protocol_record"]) != item["sha256"]):
+                    raise ValueError("Portable handoff changed")
+            return [{**record, "handoff_path": str(index)} for record in results]
         from .research_protocol import publish_handoff
         index = publish_handoff(research, cfg["campaign"].get("handoff_path"))
         cfg["campaign"]["handoff_path"] = str(index)

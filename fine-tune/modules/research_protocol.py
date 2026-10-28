@@ -115,6 +115,8 @@ def _scface(profile, seed):
 
 
 def prepare_research_protocol(profile):
+    if profile.get("portable_protocol"):
+        return verify_research_protocol(profile)
     if not profile.get("enabled", True):
         raise ValueError("Selected research training dataset is disabled")
     name, root = profile["name"], Path(profile["raw_root"]).resolve()
@@ -230,8 +232,9 @@ def prepare_research_protocol(profile):
 def verify_research_protocol(profile):
     if not profile.get("enabled", True):
         raise ValueError("Selected research training dataset is disabled")
-    record = json.loads(Path(profile["protocol_record"]).read_text(encoding="utf-8"))
-    if record["schema"] != SCHEMA or record["name"] != profile["name"]:
+    from .shared_storage import resolve_protocol
+    record = resolve_protocol(profile["protocol_record"])
+    if record["schema"] not in (SCHEMA, "facex-ronbun-roles-v2") or record["name"] != profile["name"]:
         raise ValueError("Research protocol identity mismatch")
     for key, checksum in (("roles_path", "roles_sha256"), ("train_list", "train_sha256")):
         if sha(record[key]) != record[checksum]:

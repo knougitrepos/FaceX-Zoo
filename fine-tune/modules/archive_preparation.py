@@ -8,6 +8,33 @@ import uuid
 
 
 def extract_train_archive(archive, destination, progress_seconds=10):
+    from .shared_storage import artifact_lock, sha, write_derivation
+    root = Path(destination).resolve()
+    with artifact_lock(root):
+        source_hash = sha(archive)
+        if (root / "COMPLETED").exists():
+            import json
+            previous = json.loads((root / "derivation.json").read_text(encoding="utf-8"))
+            if previous["sources"]["archive"]["sha256"] != source_hash:
+                raise FileExistsError("Completed extraction belongs to a different archive; choose a new version")
+        try:
+            result = _extract_train_archive(archive, root, progress_seconds)
+        except Exception as exc:
+            if root.exists() and not (root / "COMPLETED").exists():
+                write_derivation(root, "archive_extraction", {"archive": {"path":str(Path(archive).resolve()), "sha256":source_hash}},
+                                 {"member_prefix":"train/"}, {"error":f"{type(exc).__name__}: {exc}", "coverage":"incomplete"}, "failed")
+            raise
+        if sha(archive) != source_hash:
+            raise ValueError("Archive changed during extraction")
+        if not (root / "COMPLETED").exists():
+            write_derivation(root, "archive_extraction", {"archive": {"path":str(Path(archive).resolve()), "sha256":source_hash}},
+                             {"member_prefix":"train/", "processing":"byte-preserving extraction; no resize or alignment"},
+                             result, "completed")
+            (root / "COMPLETED").touch()
+        return result
+
+
+def _extract_train_archive(archive, destination, progress_seconds=10):
     """Extract train/ only; compare existing files and never overwrite differences.
 
     Restart scans the gzip stream again, but writes only missing files. This is
