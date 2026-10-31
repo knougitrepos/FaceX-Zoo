@@ -280,6 +280,10 @@ def build_dataloader(
     augmentation=None,
 ) -> DataLoader:
     """Build a PyTorch DataLoader for face training or evaluation."""
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+        raise ValueError("batch_size must be a positive integer")
+    if is_train and batch_size < 2:
+        raise ValueError("Training batch_size must be at least 2 for BatchNorm")
     dataset = FaceImageDataset(
         data_root=data_root,
         index_file=index_file,
@@ -292,7 +296,12 @@ def build_dataloader(
     )
     from .input_pipeline import EpochBatchSampler, initialize_worker
     if is_train and not drop_last and len(dataset) % batch_size == 1:
-        raise ValueError("Final singleton batch is incompatible with BatchNorm; select a compatible batch size")
+        raise ValueError(
+            f"Final singleton batch is incompatible with BatchNorm: "
+            f"{len(dataset)} images with batch_size={batch_size}. "
+            "Select a batch size with remainder 0 or at least 2; "
+            "the formal all-images policy must not silently drop a sample."
+        )
     sampler = EpochBatchSampler(len(dataset), batch_size, seed, shuffle=is_train, drop_last=drop_last if is_train else False)
     kwargs = {}
     if num_workers > 0:

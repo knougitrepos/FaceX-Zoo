@@ -6,6 +6,35 @@
 
 ## 저장 위치와 독립성
 
+### Backbone 이름과 단계별 학습률
+
+모델명 입력은 앞뒤 공백 제거 후 소문자화하여 판별한다. `resnet`, `ResNet`,
+`RESNET`은 모두 같으며, 새 설정에는 기존 호환 이름 `Resnet`으로 기록한다.
+MobileFaceNet도 대소문자를 구분하지 않고 새 설정에는 `MobileFaceNet`으로 기록한다.
+알 수 없는 이름은 거부한다. 기존 checkpoint와 그 metadata/hash는 변경하지 않는다.
+
+UCFace IV-A-3의 downstream baseline LR은 MobileFaceNet `0.001`, ResNet-50/100
+`0.0001`이다. 기본값 생성과 정식 fine-tune 검증에 함께 적용한다. 저장된 과거
+ResNet LR `0.001`은 조용히 교체하지 않으며 정식 fine-tune에서 거부한다.
+00의 새 설정을 확인하여 저장한 뒤 01~04에서 같은 설정 파일을 사용한다.
+ResNet-152에는 이 논문의 LR를 임의로 외삽하지 않으며 이 baseline recipe는 지원하지 않는다.
+
+`training.lr`는 downstream 설정이고 `campaign.pretrain_lr`/노트북 `PRETRAIN_LR`은
+parent의 LR이다. parent 기본 `0.001`은 이번 수정 전 로컬 조건을 유지한 것이며,
+UCFace가 parent 세부 조건을 따로 명시했다고 주장하지 않는다. 실제 parent 실행 시
+별도 LR가 optimizer·checkpoint·campaign 실행 기록에 적용된다. 기존에 명시한 값은 유지한다.
+MobileFaceNet·ResNet-50·ResNet-100 모두 baseline batch 64를 사용한다.
+00에서 공통 기본값 64를 설정하며, 정식 fine-tune 검증에서 ResNet의 소규모 batch 예외를 허용하지 않는다.
+과거 batch 16 설정 파일·checkpoint는 자동 변경하지 않는다. 00에서 새 조건을 저장한 뒤
+다른 batch의 checkpoint를 resume하지 않고 새 run을 시작한다.
+공통 downstream 조건은 Adam, 40 epochs, dropout 0.6, 10/20/30 epoch 이후 LR ×0.1이다.
+2026-10-31 GTX 1080 Ti에서 ResNet-50/100의 batch 64 합성 입력 학습 점검은 통과했지만,
+전체 데이터 학습 검증은 아니며 ResNet-100은 메모리 여유가 적다.
+
+수정 후 커널을 재시작한다. LR가 다른 checkpoint의 resume는 기존 설정 비교에서 거부한다.
+학습 코드 fingerprint도 바뀌므로 과거 parent를 자동으로 승인하지 않는다.
+새 namespace에서 검증된 조건으로 실행하고 기존 결과를 덮어쓰지 않는다.
+
 - 데이터 기본 루트: `F:/face_datasets` (`FACE_DATASET_ROOT` 환경변수).
 - 모델 기본 루트: `F:/models` (`FACE_MODEL_ROOT` 환경변수).
 - Linux 기본값: `/data/face_datasets`, `/data/models`. 서버 마운트 위치로 환경변수를 지정한다.
@@ -81,3 +110,28 @@ SurvFace calibration gallery와 등록 probe는 FR 학습 인물에서 구성되
 기존 완료 run/report는 불변이다. 기본 경로는 새 namespace이므로 과거 shared_parent 결과를 재개하지 않는다.
 GPU 정식 실행 전에 CUDA와 장치를 확인한다. Linux/A100 실제 실행 검증은 별도이며 Windows 경로 검증과 구분한다.
 전체 fine-tune 테스트: `py -3.11 -m pytest fine-tune/tests -q` (저장소 루트).
+
+## 입력 검증과 중단 복구 — 2026-10-29
+
+학습 목록 cache는 `path_index_v2`를 사용한다. 재사용할 때 원본 목록·root·schema,
+NPY의 SHA-256·행 수·dtype, 각 path/label의 원본 목록 일치를 검사한다. 이미지 전체를
+다시 decode하는 검사는 아니며 목록과 cache를 순차 읽는다. 기존 v1 cache는 수정하지 않는다.
+손상되거나 metadata가 없는 cache는 학습 전에 거절한다. 진단용 사본을 보존하고
+`paths.cache_dir`에 새 경로를 지정해 다시 생성한다. 학습 중에는 목록·cache를 변경하지 않는다.
+
+Export는 목적지별 writer lock을 사용한다. PT와 sidecar 각각의 게시만 원자적이며,
+두 파일 전체가 하나의 원자적 거래인 것은 아니다. 중단으로 PT만 남았으면 같은 checkpoint·설정으로
+04를 재실행한다(`campaign.reuse_completed=True`). 가중치와 내장 출처가 일치할 때에만
+sidecar를 복구하며 기존 PT 바이트는 변경하지 않는다. 완료된 쌍은 검증 후 재사용한다.
+다른 가중치·출처, 손상된 metadata, metadata만 남은 상태는 자동 덮어쓰기하지 않는다.
+중단 후 lock이 남았다면 기록된 host/PID의 실행 종료를 확인한 후 해당 lock만 별도로 처리한다.
+
+기존 DataLoader도 최종 1장 batch를 학습 전에 거절했다. 이번에는 잘못된 batch_size 입력과
+진단 문구를 보완했다. 정식 학습은 `drop_last=False`를 유지하며 나머지가 0 또는 2 이상인
+batch_size인지 검사한다. 현재 baseline batch 64에서 SurvFace 176,205장의 나머지는 13이다.
+자동으로 샘플을 버리거나 batch를 합치지 않는다. 이 검증은 전체 학습의 무오류 보장이 아니다.
+
+학습 중 `view` 등의 예외가 발생하면 traceback을 남기고 해당 학습과 남은 campaign 실행을 중단한다.
+campaign 보고서에는 실패한 run과 시작하지 않은 run을 기록한다. 오류가 난 batch를 건너뛰지 않는다.
+원인을 확인한 뒤 마지막으로 정상 저장된 checkpoint를 명시하여 재개한다.
+오류 발생 직전 상태가 반드시 저장되는 것은 아니므로 마지막 저장 이후 계산은 다시 필요할 수 있다.

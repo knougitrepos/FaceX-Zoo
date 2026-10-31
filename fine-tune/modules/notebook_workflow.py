@@ -30,7 +30,7 @@ from .checkpoint_manager import (
 from .dataset import VGGFace2ArchiveInspector, build_dataloader, validate_dataset_files, resolve_image_path
 from .model_builder import build_model
 from .trainer import Trainer, set_seed, TrainingStopped
-from .backbone_factory import backbone_slug
+from .backbone_factory import backbone_slug, canonical_backbone_type, baseline_learning_rate
 from .finetune_protocol import default_profiles, verify_protocol
 from .baseline_policy import VERSION, DEFAULT_AUGMENTATION, validate_augmentation, code_fingerprints
 from .alignment import bind_aligned_dataset
@@ -85,6 +85,7 @@ def resolve_settings(base_dir, settings_path=None, overrides=None, require_saved
                         log_dir=str(root / "fine-tune/logs/adjust1"),
                         report_dir=str(root / "fine-tune/reports/campaigns/adjust1"),
                         cache_dir=str(root / "fine-tune/data/adjust1/index_cache"))
+    saved = {}
     if settings_path and Path(settings_path).is_file():
         saved = json.loads(Path(settings_path).read_text(encoding="utf-8"))
         if saved.get("baseline_version") != VERSION:
@@ -99,8 +100,13 @@ def resolve_settings(base_dir, settings_path=None, overrides=None, require_saved
             # dependencies in new checkpoint provenance.
             for key in ("local_audit", "legacy_fiqa_manifest"):
                 profile.pop(key, None)
-    if cfg["backbone"]["type"] in ("Resnet", "ResNet"):
-        cfg["backbone"]["type"] = "Resnet"
+    # Preserve explicitly saved/overridden learning rates; formal validation must
+    # reject stale settings instead of silently changing an existing experiment.
+    cfg["campaign"].setdefault("pretrain_lr", saved.get("training", {}).get("lr", cfg["training"]["lr"]))
+    cfg["backbone"]["type"] = canonical_backbone_type(cfg["backbone"]["type"])
+    if "lr" not in saved.get("training", {}) and "lr" not in (overrides or {}).get("training", {}):
+        cfg["training"]["lr"] = baseline_learning_rate(cfg["backbone"])
+    if cfg["backbone"]["type"] == "Resnet":
         cfg["backbone"].setdefault("num_layers", 50)
         cfg["backbone"].setdefault("mode", "ir")
     validate_settings(cfg)
@@ -156,12 +162,16 @@ def validate_settings(cfg):
         raise ValueError("SCFace/unavailable dataset training disabled until acquisition and protocol verification")
     if list(cfg["dataset"]["input_size"]) != [112, 112]:
         raise ValueError("Current MobileFaceNet/export architecture requires INPUT_SIZE=(112,112).")
-    if cfg["backbone"]["type"] not in ("MobileFaceNet", "Resnet", "ResNet") or (cfg["backbone"]["out_h"], cfg["backbone"]["out_w"]) != (7, 7):
+    canonical_backbone_type(cfg["backbone"]["type"])
+    if (cfg["backbone"]["out_h"], cfg["backbone"]["out_w"]) != (7, 7):
         raise ValueError("Use MobileFaceNet or FaceX Resnet with out_h=out_w=7.")
     if cfg["training"]["batch_size"] < 2:
         raise ValueError("BATCH_SIZE must be >= 2 for training BatchNorm.")
     if cfg["training"]["epoches"] < 1 or cfg["training"]["save_freq"] < 1:
         raise ValueError("EPOCHS and SAVE_FREQ must be positive")
+    for lr in (cfg["training"]["lr"], cfg["campaign"].get("pretrain_lr", cfg["training"]["lr"])):
+        if isinstance(lr, bool) or not isinstance(lr, (int, float)) or not np.isfinite(lr) or lr <= 0:
+            raise ValueError("Learning rates must be positive finite numbers")
     if not np.isfinite(cfg["dataset"]["pixel_std"]) or cfg["dataset"]["pixel_std"] <= 0:
         raise ValueError("PIXEL_STD must be positive and finite")
     if not np.isfinite(cfg["dataset"]["pixel_mean"]):
@@ -183,6 +193,8 @@ def write_json(path, payload, immutable=False):
 
 
 def save_settings(path, cfg):
+    cfg = copy.deepcopy(cfg)
+    cfg["backbone"]["type"] = canonical_backbone_type(cfg["backbone"]["type"])
     validate_settings(cfg)
     return write_json(path, cfg)
 
@@ -399,14 +411,11 @@ def _formal_device(cfg):
 
 def validate_paper_parameters(cfg):
     """Protect the low-resolution baseline recipe while tuning execution settings."""
-    required = {"optimizer": "adam", "lr": 0.001, "epoches": 40, "batch_size": 64,
+    required = {"optimizer": "adam", "lr": baseline_learning_rate(cfg["backbone"]), "epoches": 40, "batch_size": 64,
                 "milestones": [10, 20, 30], "lr_decay_ratio": 0.1}
-    if cfg["backbone"]["type"] == "Resnet":
-        # Explicit hardware-dependent batch choice; recorded in source_config.
-        required.pop("batch_size")
     for key, value in required.items():
         if cfg["training"][key] != value:
-            raise ValueError(f"Paper baseline requires training.{key}={value!r}")
+            raise ValueError(f"Paper baseline requires training.{key}={value!r}; update notebook 00 settings and start a matching run")
     if cfg["backbone"]["feat_dim"] != 1024 or cfg["backbone"]["dropout_rate"] != 0.6:
         raise ValueError("Main-paper MobileFaceNet baseline requires 1024D/dropout 0.6")
     expected = {"arcface": {"margin_arc": 0.6, "scale": 64.0},
@@ -433,8 +442,17 @@ def validate_parent_preprocessing(parent_cfg, parent_dataset, settings):
             raise ValueError(f"Common parent preprocessing.{key} differs")
 
 
-def _run_one(cfg, row, resume_path=None, smoke=False):
+def stage_settings(cfg, stage):
+    """Resolve the effective optimizer LR without mutating saved provenance."""
     cfg = copy.deepcopy(cfg)
+    cfg["backbone"]["type"] = canonical_backbone_type(cfg["backbone"]["type"])
+    if stage == "pretrain":
+        cfg["training"]["lr"] = cfg["campaign"].get("pretrain_lr", cfg["training"]["lr"])
+    return cfg
+
+
+def _run_one(cfg, row, resume_path=None, smoke=False):
+    cfg = stage_settings(cfg, row["stage"])
     parent_dataset = copy.deepcopy(cfg["dataset"])
     cfg["project"]["seed"] = row["seed"]
     torch.set_num_threads(cfg["training"].get("torch_threads", 2))
@@ -479,7 +497,11 @@ def _run_one(cfg, row, resume_path=None, smoke=False):
             if parent_cfg.get("dataset", {}).get("name") != "VGGFace2":
                 raise ValueError("Common parent must declare VGGFace2 pretraining")
             for key in ("type", "feat_dim", "dropout_rate", "num_layers", "mode"):
-                if parent_cfg.get("backbone", {}).get(key) != cfg["backbone"].get(key):
+                actual = parent_cfg.get("backbone", {}).get(key)
+                expected = cfg["backbone"].get(key)
+                if key == "type":
+                    actual, expected = canonical_backbone_type(actual), canonical_backbone_type(expected)
+                if actual != expected:
                     raise ValueError(f"Common parent backbone.{key} differs")
             if parent_cfg.get("baseline_version") != VERSION or parent_cfg.get("head", {}).get("numerical_policy") != NUMERICAL_POLICY:
                 raise ValueError("Common parent must be trained from the start under the current FP32 boundary policy")
@@ -593,6 +615,7 @@ def _matrix(cfg, stage, operation):
 def run_training_matrix(cfg, stage, resume_checkpoints=None, smoke=False):
     if stage not in ("pretrain", "finetune"):
         raise ValueError(stage)
+    cfg = stage_settings(cfg, stage)
     resume = resume_checkpoints or {}
     valid = {r["run_id"] for r in plan_matrix(cfg, stage)}
     if set(resume) - valid:
@@ -637,12 +660,15 @@ def _export_one(cfg, row):
     filename = f"exported_{backbone_slug(stored['backbone'])}_{dim}d_{head}_seed{seed}.pt"
     out = out_dir / filename
     metadata_path = out.with_name(out.stem + "_meta.json")
-    if out.exists():
+    if out.exists() and metadata_path.exists():
         meta = json.loads(metadata_path.read_text(encoding="utf-8"))
         if not cfg["campaign"]["reuse_completed"] or meta.get("source_sha256") != source_hash or meta.get("sha256") != compute_sha256(str(out)):
             raise FileExistsError(f"Existing export cannot be verified for this source: {out}")
         status = "reused_completed"
     else:
+        recovering = out.exists()
+        if recovering and not cfg["campaign"]["reuse_completed"]:
+            raise FileExistsError(f"Interrupted export recovery requires reuse_completed: {out}")
         metadata = {**row, "completed": True, "is_smoke": False, "feat_dim": dim,
                     "source_checkpoint": str(path), "source_sha256": source_hash,
                     "source_config": stored, "source_config_hash": payload["config_hash"],
@@ -657,7 +683,7 @@ def _export_one(cfg, row):
                     "ronbun_integration": "not_executed", "fiqa_evaluation": "not_executed"}
         CheckpointManager(str(out_dir)).export_backbone_only(payload, filename, metadata,
                                                            target_feat_dim=dim, allow_overwrite=False)
-        status = "completed"
+        status = "recovered_interrupted" if recovering else "completed"
     return {**row, "status": status, "completed": True, "export": str(out),
             "sha256": compute_sha256(str(out)), "source_sha256": source_hash}
 

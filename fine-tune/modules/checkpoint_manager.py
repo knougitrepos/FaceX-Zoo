@@ -10,6 +10,8 @@ import random
 import hashlib
 import logging
 import collections
+import uuid
+from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, List
 
 import numpy as np
@@ -1122,21 +1124,45 @@ class CheckpointManager:
         target_feat_dim: int = 1024,
         allow_overwrite: bool = False,
     ) -> str:
+        """Serialize writers and safely complete a previously interrupted export.
+
+        Each file is atomically published; the two-file pair is not an atomic
+        transaction. A surviving PT is recoverable only from the same weights
+        and provenance. Completed pairs are immutable by default.
+        """
+        try:
+            from .shared_storage import artifact_lock
+        except ImportError:
+            from shared_storage import artifact_lock
+        destination = Path(self.checkpoint_dir) / output_filename
+        with artifact_lock(destination):
+            return self._export_backbone_locked(
+                model, output_filename, metadata, target_feat_dim, allow_overwrite)
+
+    def _export_backbone_locked(
+        self,
+        model: Any,
+        output_filename: str,
+        metadata: Dict[str, Any],
+        target_feat_dim: int = 1024,
+        allow_overwrite: bool = False,
+    ) -> str:
         """Export clean inference backbone weights (for ronbun and evaluation benchmarks).
         
         Guarantees:
         1. Rejects any checkpoint declared or marked as is_smoke=True.
         2. Blocks overwriting completed exports (unless allow_overwrite=True).
         3. Filters out all classifier/head keys (e.g. head.*, classifier.*).
-        4. Verifies strict loadability into a standalone MobileFaceNet before publishing.
-        5. Atomically publishes using os.replace without prior destructive deletion.
+        4. Verifies strict loadability into the declared backbone before publishing.
+        5. Recovers an interrupted matching pair without rewriting its weights.
         """
         if metadata.get("is_smoke") is True:
             logger.error("[Export Violation] Cannot export smoke-test checkpoint as formal release!")
             raise ValueError("Cannot export smoke-test checkpoint as formal release!")
 
         export_pt = os.path.join(self.checkpoint_dir, output_filename)
-        if os.path.exists(export_pt) and not allow_overwrite:
+        meta_json_path = os.path.splitext(export_pt)[0] + "_meta.json"
+        if os.path.exists(meta_json_path) and not allow_overwrite:
             logger.error(
                 f"[Export Blocked] Exported model already exists at: {export_pt}. "
                 "Overwriting completed exports is strictly forbidden to preserve experimental immutability."
@@ -1170,13 +1196,17 @@ class CheckpointManager:
                 continue
             clean_weights[clean_k] = v.cpu()
 
-        tmp_export_pt = export_pt + ".tmp"
+        # Hash/file fields are computed from the published bytes, not embedded
+        # recursively in the checkpoint. Do not mutate the caller's provenance.
+        metadata = copy.deepcopy(metadata)
+        metadata.pop("sha256", None)
+        metadata.pop("exported_file", None)
+        token = uuid.uuid4().hex
+        tmp_export_pt = export_pt + f".{token}.tmp"
+        tmp_meta_json = meta_json_path + f".{token}.tmp"
         os.makedirs(self.checkpoint_dir, exist_ok=True)
 
         try:
-            # 1. Save to temporary file first
-            torch.save({"state_dict": clean_weights, "metadata": metadata}, tmp_export_pt)
-
             # Validate the declared backbone, including Resnet depth/mode.
             try:
                 from .backbone_factory import build_backbone
@@ -1193,20 +1223,52 @@ class CheckpointManager:
             with torch.no_grad():
                 dummy_out = validator_model(torch.randn(2, 3, 112, 112))
                 assert dummy_out.shape == (2, target_feat_dim), f"Shape mismatch: {dummy_out.shape}"
+                if not torch.isfinite(dummy_out).all():
+                    raise ValueError("Export backbone produced non-finite embeddings")
+
+            recover = os.path.exists(export_pt) and not allow_overwrite
+            if recover:
+                # Do not infer provenance for an arbitrary legacy backbone.
+                # Exact tensor and embedded provenance equality are both needed.
+                surviving_hash = compute_sha256(export_pt)
+                surviving = load_checkpoint(export_pt, map_location="cpu")
+                previous_weights = surviving.get("state_dict", {})
+                previous_meta = surviving.get("metadata")
+                if (not isinstance(previous_meta, dict)
+                        or set(previous_weights) != set(clean_weights)
+                        or any(previous_weights[k].dtype != v.dtype
+                               or previous_weights[k].shape != v.shape
+                               or not torch.equal(previous_weights[k], v)
+                               for k, v in clean_weights.items())):
+                    raise ValueError("Interrupted export weights differ from source; preserve it and use a new destination")
+                def stable_provenance(record):
+                    # A repeated verification can change its timestamp/cache-use
+                    # receipt. The actual source/config/protocol must still match.
+                    return json.dumps({k: v for k, v in record.items()
+                                       if k not in ("sha256", "exported_file", "export_data_verification")},
+                                      sort_keys=True)
+                if stable_provenance(previous_meta) != stable_provenance(metadata):
+                    raise ValueError("Interrupted export provenance differs from source; preserve it and use a new destination")
+                validator_model.load_state_dict(previous_weights, strict=True)
+                if compute_sha256(export_pt) != surviving_hash:
+                    raise ValueError("Interrupted export changed during recovery")
+                metadata = copy.deepcopy(previous_meta)
+                export_hash = surviving_hash
+            else:
+                torch.save({"state_dict": clean_weights, "metadata": metadata}, tmp_export_pt)
+                export_hash = compute_sha256(tmp_export_pt)
 
             # Compute SHA-256 for the verified exported checkpoint before moving
-            export_hash = compute_sha256(tmp_export_pt)
             metadata["sha256"] = export_hash
             metadata["exported_file"] = output_filename
 
             # 3. Validation passed: Write metadata JSON to temporary file
-            meta_json_path = os.path.splitext(export_pt)[0] + "_meta.json"
-            tmp_meta_json = meta_json_path + ".tmp"
             with open(tmp_meta_json, "w", encoding="utf-8") as f:
                 json.dump(metadata, f, indent=2, ensure_ascii=False)
 
-            # 4. Atomically publish both export weights and metadata JSON
-            os.replace(tmp_export_pt, export_pt)
+            # Publish each file atomically. Recovery never rewrites the PT.
+            if not recover:
+                os.replace(tmp_export_pt, export_pt)
             os.replace(tmp_meta_json, meta_json_path)
 
             logger.info(f"Verified & exported clean backbone weights to {export_pt} (SHA-256: {export_hash})")
@@ -1215,8 +1277,6 @@ class CheckpointManager:
         except Exception as e:
             if os.path.exists(tmp_export_pt):
                 os.remove(tmp_export_pt)
-            meta_json_path = os.path.splitext(export_pt)[0] + "_meta.json"
-            tmp_meta_json = meta_json_path + ".tmp"
             if os.path.exists(tmp_meta_json):
                 os.remove(tmp_meta_json)
             logger.error(f"Failed to export backbone weights: {e}", exc_info=True)

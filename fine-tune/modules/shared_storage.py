@@ -30,9 +30,7 @@ def external_settings(base_dir, dataset_root=None, model_root=None, backbone=Non
     from .backbone_factory import backbone_slug
     data = Path(dataset_root or os.environ.get("FACE_DATASET_ROOT", "F:/face_datasets" if os.name=="nt" else "/data/face_datasets")).expanduser().resolve()
     models = Path(model_root or os.environ.get("FACE_MODEL_ROOT", "F:/models" if os.name=="nt" else "/data/models")).expanduser().resolve()
-    cfg = resolve_settings(base_dir)
-    if backbone:
-        cfg["backbone"].update(backbone)
+    cfg = resolve_settings(base_dir, overrides={"backbone": backbone} if backbone else None)
     cfg["backbone"]["feat_dim"] = 1024
     namespace = namespace or "shared_v1_boundary_" + backbone_slug(cfg["backbone"])
     if (not isinstance(namespace,str) or namespace in (".","..")

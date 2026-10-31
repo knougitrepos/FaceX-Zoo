@@ -1,0 +1,105 @@
+{
+  "scope": "00 configuration cell only; no saved settings writes or training",
+  "rows": [
+    {
+      "backbone": {
+        "type": "MobileFaceNet",
+        "feat_dim": 1024,
+        "out_h": 7,
+        "out_w": 7,
+        "dropout_rate": 0.6
+      },
+      "training": {
+        "optimizer": "adam",
+        "lr": 0.001,
+        "weight_decay": 0.0001,
+        "epoches": 40,
+        "milestones": [
+          10,
+          20,
+          30
+        ],
+        "lr_decay_ratio": 0.1,
+        "drop_last": false,
+        "batch_size": 64,
+        "num_workers": 4,
+        "print_freq": 20,
+        "save_freq": 1,
+        "prefetch_factor": 4,
+        "persistent_workers": true,
+        "torch_threads": 2,
+        "recovery_minutes": 10,
+        "loss_sync_batches": 20
+      },
+      "parent_lr": 0.001
+    },
+    {
+      "backbone": {
+        "type": "Resnet",
+        "feat_dim": 1024,
+        "out_h": 7,
+        "out_w": 7,
+        "dropout_rate": 0.6,
+        "num_layers": 50,
+        "mode": "ir"
+      },
+      "training": {
+        "optimizer": "adam",
+        "lr": 0.0001,
+        "weight_decay": 0.0001,
+        "epoches": 40,
+        "milestones": [
+          10,
+          20,
+          30
+        ],
+        "lr_decay_ratio": 0.1,
+        "drop_last": false,
+        "batch_size": 64,
+        "num_workers": 4,
+        "print_freq": 20,
+        "save_freq": 1,
+        "prefetch_factor": 4,
+        "persistent_workers": true,
+        "torch_threads": 2,
+        "recovery_minutes": 10,
+        "loss_sync_batches": 20
+      },
+      "parent_lr": 0.001
+    },
+    {
+      "backbone": {
+        "type": "Resnet",
+        "feat_dim": 1024,
+        "out_h": 7,
+        "out_w": 7,
+        "dropout_rate": 0.6,
+        "num_layers": 100,
+        "mode": "ir"
+      },
+      "training": {
+        "optimizer": "adam",
+        "lr": 0.0001,
+        "weight_decay": 0.0001,
+        "epoches": 40,
+        "milestones": [
+          10,
+          20,
+          30
+        ],
+        "lr_decay_ratio": 0.1,
+        "drop_last": false,
+        "batch_size": 64,
+        "num_workers": 4,
+        "print_freq": 20,
+        "save_freq": 1,
+        "prefetch_factor": 4,
+        "persistent_workers": true,
+        "torch_threads": 2,
+        "recovery_minutes": 10,
+        "loss_sync_batches": 20
+      },
+      "parent_lr": 0.001
+    }
+  ]
+}

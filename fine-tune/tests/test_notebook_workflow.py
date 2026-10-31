@@ -182,6 +182,14 @@ def test_real_small_image_matrix_and_export(aligned_cfg, monkeypatch):
         exports = flow.export_matrix(cfg)
         assert len(exports) == 8 and all(r["completed"] for r in exports)
         assert all(r["status"] == "reused_completed" for r in flow.export_matrix(cfg))
+        # Exercise the actual notebook retry path, not only the export utility.
+        interrupted = Path(exports[0]["export"])
+        interrupted_hash = flow.compute_sha256(str(interrupted))
+        interrupted.with_name(interrupted.stem + "_meta.json").unlink()
+        recovered = flow.export_matrix(cfg)
+        assert recovered[0]["status"] == "recovered_interrupted"
+        assert flow.compute_sha256(str(interrupted)) == interrupted_hash
+        assert all(r["status"] == "reused_completed" for r in recovered[1:])
         for out in exports:
             meta = json.loads(Path(out["export"]).with_name(Path(out["export"]).stem + "_meta.json").read_text())
             assert meta["preprocessing"]["pixel_std"] == 255

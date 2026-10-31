@@ -1,6 +1,7 @@
 """Scientific contracts for adjust1; bounded CPU tests, never a campaign result."""
 import copy
 import json
+import re
 from pathlib import Path
 import sys
 
@@ -162,10 +163,17 @@ def test_notebook_plan_execution_isolated_settings(name, tmp_path, monkeypatch):
     flow.save_settings(path, flow.resolve_settings(root))
     nb = json.loads((root / "fine-tune/notebooks" / name).read_text(encoding="utf-8"))
     namespace = {}
+    redirected = 0
     for cell in nb["cells"]:
         if cell["cell_type"] == "code":
-            source = "".join(cell["source"]).replace(
-                'SETTINGS_PATH = BASE_DIR / "fine-tune/data/research_v1/notebook_settings_mobilefacenet.json"',
-                f"SETTINGS_PATH = Path({str(path)!r})")
+            source, count = re.subn(r"(?m)^SETTINGS_PATH = .*?$",
+                                   lambda _: f"SETTINGS_PATH = Path({str(path)!r})",
+                                   "".join(cell["source"]))
+            redirected += count
+            # Refuse to execute a changed notebook layout against live settings.
+            if "save_settings(" in source:
+                assert redirected == 1
             exec(compile(source, name, "exec"), namespace)
+    assert redirected == 1
+    assert namespace["SETTINGS_PATH"] == path
     assert namespace["settings"]["parent_head"]["margin_arc"] == .35

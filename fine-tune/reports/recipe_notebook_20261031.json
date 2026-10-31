@@ -1,0 +1,20 @@
+[
+  {
+    "input": "MobileFaceNet",
+    "canonical": "MobileFaceNet",
+    "fine_tune_lr": 0.001,
+    "parent_lr": 0.001
+  },
+  {
+    "input": "rEsNeT",
+    "canonical": "Resnet",
+    "fine_tune_lr": 0.0001,
+    "parent_lr": 0.001
+  },
+  {
+    "input": "RESNET",
+    "canonical": "Resnet",
+    "fine_tune_lr": 0.0001,
+    "parent_lr": 0.001
+  }
+]

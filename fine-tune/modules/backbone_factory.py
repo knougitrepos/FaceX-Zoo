@@ -3,8 +3,25 @@ from backbone.MobileFaceNets import MobileFaceNet
 from backbone.ResNets import Resnet
 
 
+def canonical_backbone_type(value):
+    """Case-insensitive input, stable names in newly generated metadata."""
+    names = {"mobilefacenet": "MobileFaceNet", "resnet": "Resnet"}
+    if not isinstance(value, str) or value.strip().lower() not in names:
+        raise ValueError(f"Unsupported backbone type: {value!r}")
+    return names[value.strip().lower()]
+
+
+def baseline_learning_rate(config):
+    """UCFace IV-A-3 downstream baseline learning rates."""
+    if canonical_backbone_type(config.get("type", "MobileFaceNet")) == "MobileFaceNet":
+        return 0.001
+    if int(config.get("num_layers", 50)) not in (50, 100):
+        raise ValueError("UCFace baseline LR is specified here only for Resnet-50/100")
+    return 0.0001
+
+
 def build_backbone(config):
-    kind = config.get("type", "MobileFaceNet")
+    kind = canonical_backbone_type(config.get("type", "MobileFaceNet"))
     dim = int(config.get("feat_dim", 1024))
     dropout = float(config.get("dropout_rate", .6))
     if dim < 1:
@@ -23,6 +40,6 @@ def build_backbone(config):
 
 
 def backbone_slug(config):
-    if config.get("type") == "MobileFaceNet":
+    if canonical_backbone_type(config.get("type", "MobileFaceNet")) == "MobileFaceNet":
         return "mobilefacenet"
     return f"resnet{config.get('num_layers', 50)}_{config.get('mode', 'ir')}"

@@ -4,7 +4,8 @@
 # [1] 논문 본문(IEEE TIFS 2024 IV-A) 직접 확인 기준:
 #     - MobileFaceNet 1024D (Table I)
 #     - Adam optimizer (IV-A-3)
-#     - lr = 1e-3, decay 0.1 at [10, 20, 30] epochs (IV-A-3)
+#     - baseline lr: MobileFaceNet=1e-3, ResNet-50/100=1e-4 (IV-A-3)
+#     - decay 0.1 at [10, 20, 30] epochs
 #     - total epochs = 40 (IV-A-3)
 #     - batch size = 64 for softmax classifiers (IV-A-3)
 #     - internal dropout rate = 0.6 (IV-A-3)
