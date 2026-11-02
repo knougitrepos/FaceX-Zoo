@@ -135,3 +135,43 @@ batch_size인지 검사한다. 현재 baseline batch 64에서 SurvFace 176,205�
 campaign 보고서에는 실패한 run과 시작하지 않은 run을 기록한다. 오류가 난 batch를 건너뛰지 않는다.
 원인을 확인한 뒤 마지막으로 정상 저장된 checkpoint를 명시하여 재개한다.
 오류 발생 직전 상태가 반드시 저장되는 것은 아니므로 마지막 저장 이후 계산은 다시 필요할 수 있다.
+
+
+## 전처리 재개 (2026-11-02)
+
+01/03에서 `EXECUTE=True`, `RUN_PREPROCESSING=True`, `PREPROCESS_MAX_IMAGES=None`,
+`RESUME_PREPROCESSING=True`로 실행한다. 이미 archive 추출을 완료한 01은
+`EXTRACT_TRAIN_ARCHIVE=False`를 사용한다. 커널을 재시작하고 설정 셀부터 실행한다.
+CPU 정렬/리사이징 정책과 학습 데이터 분할은 변경하지 않는다.
+
+- 새 출력: 재개 계약을 먼저 저장하고 전체 전처리를 시작한다.
+- 중단 출력: 입력 목록 hash, 경로, label, 전처리 정책과 복구 코드 hash를 확인한다.
+  시작 계약이 없던 구버전의 이미지는 원본을 다시 읽어 동일 변환의 픽셀과 대조한다.
+  정상 PNG는 다시 쓰지 않는다. 이 최초 검증은 빠른 건너뛰기가 아니며 시간이 걸린다.
+- 새 journal의 정상 행은 원본/출력 SHA-256, decode, 크기를 확인해 재사용한다.
+  source bytes/분할/정책이 달라지면 중단한다. 임의로 계약 파일을 지우지 않는다.
+- 잘린 마지막 JSONL 행은 보존하고 재처리한다. 중간의 손상된 JSON/순서 불일치는 중단한다.
+  기록 없이 남은 PNG는 현재 변환과 픽셀 대조한다. 손상·다른 PNG는 recovery 시도 폴더에
+  원본을 보존한 후 atomic replace한다. 학습 목록은 검증된 행으로 재구성한다.
+- OS 잠금은 프로세스 종료 시 해제된다. 기존 artifact lock은 같은 호스트의 PID가
+  없을 때만 별도 stale 파일로 보존하고 회수한다(psutil 필요). 살아 있는 PID나 다른
+  호스트의 lock은 자동 제거하지 않는다. 노트북 중단 후 자식 프로세스가 살아 있으면 기다린다.
+- 완료 결과는 수정하지 않고 전체 검증만 수행한다. report 게시 후 marker 직전의 중단은
+  전체 검증 후 COMPLETED만 복구한다. 검증/변환은 CPU 작업이며 GPU 학습 완료와 무관하다.
+
+출력의 `resume_contract.json`은 재개 계약, `recovery/<시도>/manifest.jsonl`과
+`train_list.txt`는 매 시도의 상세 기록이다. 1,000행마다 flush/fsync하며 중단 직전의
+미저장 구간은 다음 실행에서 픽셀 검증 또는 재처리한다. `previous-*`는 게시 전 기록,
+`replaced/`는 교체된 이미지다. 자동 삭제하지 않으며 입력/전처리 cache이므로 학습의
+`KEEP_RAW_RESULTS=False`로 삭제하지 않는다. 출력은 기존 외부 dataset root를 따르며
+Git에 커밋하지 않는다. metadata 기록은 매 시도마다 늘어나므로 가용 공간을 확인한다.
+
+`report.json`의 `total/processed/prepared/failed`는 전체 범위/처리/성공/실패 수,
+`reused_images`는 PNG를 재작성하지 않은 수, `regenerated_images`는 새로 쓴 수다.
+`completed=true`, `failed=0`, `COMPLETED`와 학습 전 검증 통과를 함께 확인한다.
+부분 report는 학습에 사용할 수 없다. 학습/FPIR/TPIR 성능 결과를 뜻하지 않는다.
+01은 변환 뒤 학습 입력 검증도 수행하므로 이미지 저장이 끝나도 셀이 즉시 끝나지 않을 수 있다.
+
+전처리 자식 프로세스의 stdout/stderr는 노트북과 launch ticket의 `console.log`에 함께 기록한다.
+실패 시 해당 로그의 원본 traceback을 확인한다. 커널 재시작으로 변경된 process_runner를 로드한다.
+노트북에서 interrupt하면 자식 프로세스를 종료하고 산출물을 보존하며, 다음 실행에서 재개 검증한다.

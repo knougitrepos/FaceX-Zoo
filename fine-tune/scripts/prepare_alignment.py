@@ -15,6 +15,7 @@ def main():
     parser.add_argument("--max-images", type=int)
     parser.add_argument("--output-dir", help="Separate directory for bounded audits")
     parser.add_argument("--device", default="cpu", choices=["cpu"], help="CPU preprocessing; no detector models")
+    parser.add_argument("--resume", action="store_true", help="Verify and recover incomplete preprocessing without deleting existing PNGs")
     args = parser.parse_args()
     from modules.notebook_workflow import resolve_settings
     from modules.alignment import create_preprocessor, prepare_alignment
@@ -29,11 +30,15 @@ def main():
         raise ValueError("Use a separate --output-dir for a bounded audit")
     output = Path(args.output_dir or Path(ds["alignment_report"]).parent).resolve()
     source_list, raw_root = Path(ds["train_list"]).resolve(), Path(ds["raw_root"]).resolve()
-    if output.exists():
+    if output.exists() and not args.resume:
         raise FileExistsError(f"Preparation output already exists: {output}")
     aligner = create_preprocessor(ROOT, cfg, ds)
     try:
-        result = prepare_alignment(source_list, raw_root, output, aligner, args.max_images)
+        if args.resume:
+            from modules.alignment_resume import resume_alignment
+            result = resume_alignment(source_list, raw_root, output, aligner, args.max_images)
+        else:
+            result = prepare_alignment(source_list, raw_root, output, aligner, args.max_images)
     finally:
         if hasattr(aligner, "close"):
             aligner.close()

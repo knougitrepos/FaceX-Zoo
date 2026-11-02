@@ -1,6 +1,7 @@
 """Notebook controls; training and spawn workers live in a separate Python process."""
 import copy
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -8,7 +9,7 @@ import uuid
 from pathlib import Path
 
 
-def launch_alignment(base_dir, cfg, dataset, max_images=32, output_dir=None, device="cpu"):
+def launch_alignment(base_dir, cfg, dataset, max_images=32, output_dir=None, device="cpu", resume=False):
     """Run dataset-specific CPU preprocessing with the notebook's exact settings."""
     from .notebook_workflow import save_settings
     root = Path(base_dir)
@@ -16,6 +17,8 @@ def launch_alignment(base_dir, cfg, dataset, max_images=32, output_dir=None, dev
     ticket.mkdir(parents=True)
     request = ticket / "settings.json"
     save_settings(request, cfg)
+    if resume and max_images is not None:
+        raise ValueError("Resume requires max_images=None")
     if max_images is not None and output_dir is None:
         ds = cfg["dataset"] if dataset == "vggface2" else cfg["finetune_profiles"][dataset]
         output_dir = Path(ds["alignment_report"]).parent.parent / "audits" / ticket.name
@@ -25,8 +28,34 @@ def launch_alignment(base_dir, cfg, dataset, max_images=32, output_dir=None, dev
         cmd += ["--max-images", str(max_images)]
     if output_dir is not None:
         cmd += ["--output-dir", str(output_dir)]
+    if resume:
+        cmd += ["--resume"]
     print(f"Alignment settings: {request}; bounded limit: {max_images}", flush=True)
-    subprocess.run(cmd, cwd=root, check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    _stream_alignment(cmd, root, ticket / "console.log")
+
+
+def _stream_alignment(cmd, root, log_path):
+    """Explicit pipes work with Jupyter/CREATE_NO_WINDOW and retain child tracebacks."""
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    with Path(log_path).open("w", encoding="utf-8", buffering=1) as log:
+        proc = subprocess.Popen(cmd, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, encoding="utf-8", errors="replace", env=env,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        print(f"Preprocessing PID {proc.pid}; log: {log_path}", flush=True)
+        try:
+            with proc.stdout:
+                for line in proc.stdout:
+                    log.write(line)
+                    print(line, end="", flush=True)
+            code = proc.wait()
+        except KeyboardInterrupt:
+            # Do not leave a writer alive after losing its pipe/log owner.
+            proc.terminate()
+            proc.wait()
+            print(f"Preprocessing interrupted; preserved outputs can resume. Log: {log_path}", flush=True)
+            raise
+    if code:
+        raise RuntimeError(f"Preprocessing exited with code {code}. Full child traceback: {log_path}")
 
 
 def launch_campaign(base_dir, cfg, stage, resume_checkpoints=None, smoke=False,
