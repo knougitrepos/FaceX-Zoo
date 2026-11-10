@@ -32,6 +32,19 @@ def main():
     source_list, raw_root = Path(ds["train_list"]).resolve(), Path(ds["raw_root"]).resolve()
     if output.exists() and not args.resume:
         raise FileExistsError(f"Preparation output already exists: {output}")
+    # An already completed dataset is a verification task, not a new alignment
+    # task. Honor the same receipt/force policy used by training and export.
+    report_path = Path(ds["alignment_report"])
+    if (args.resume and args.max_images is None and output == report_path.parent.resolve()
+            and cfg.get("data_integrity", {}).get("mode") == "immutable_verified_reuse"
+            and report_path.is_file()):
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        if report.get("completed") is True:
+            from modules.dataset_verification import bind_aligned_dataset
+            selected = dict(cfg, dataset={**cfg["dataset"], **ds})
+            checked = bind_aligned_dataset(selected)
+            print(json.dumps(checked["data_integrity_verification"], indent=2))
+            return 0
     aligner = create_preprocessor(ROOT, cfg, ds)
     try:
         if args.resume:

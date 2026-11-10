@@ -431,6 +431,8 @@ class Trainer:
             "checkpoint": self.last_saved_ckpt, "sha256": source_hash,
             "source_training_numerics": meta.get("training_numerics"),
         }
+        if meta.get("verification_source_transition"):
+            self.resume_source["verification_source_transition"] = meta["verification_source_transition"]
         # Restore accumulated history if available
         loaded_history = meta.get("history") if meta else None
         if loaded_history and isinstance(loaded_history, dict) and "epochs" in loaded_history and len(loaded_history["epochs"]) > 0:

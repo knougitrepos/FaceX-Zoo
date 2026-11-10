@@ -33,7 +33,8 @@ from .trainer import Trainer, set_seed, TrainingStopped
 from .backbone_factory import backbone_slug, canonical_backbone_type, baseline_learning_rate
 from .finetune_protocol import default_profiles, verify_protocol
 from .baseline_policy import VERSION, DEFAULT_AUGMENTATION, validate_augmentation, code_fingerprints
-from .alignment import bind_aligned_dataset
+from .dataset_verification import bind_aligned_dataset, validate_options
+from .checkpoint_compatibility import source_transition
 from .target_margin import NUMERICAL_POLICY
 
 HEAD_NAMES = ("arcface", "adaface", "magface", "cosface")
@@ -114,9 +115,7 @@ def resolve_settings(base_dir, settings_path=None, overrides=None, require_saved
 
 
 def validate_settings(cfg):
-    from .integrity_cache import MODES
-    if cfg.get("data_integrity", {}).get("mode", "content_verified_reuse") not in MODES:
-        raise ValueError("data_integrity.mode must be content_verified_reuse or full")
+    validate_options(cfg.get("data_integrity", {}))
     if cfg.get("baseline_version") != VERSION:
         raise ValueError("Unsupported baseline_version")
     preprocessing = cfg["alignment"]
@@ -505,7 +504,8 @@ def _run_one(cfg, row, resume_path=None, smoke=False):
                     raise ValueError(f"Common parent backbone.{key} differs")
             if parent_cfg.get("baseline_version") != VERSION or parent_cfg.get("head", {}).get("numerical_policy") != NUMERICAL_POLICY:
                 raise ValueError("Common parent must be trained from the start under the current FP32 boundary policy")
-            if parent_cfg.get("code_fingerprints") != code_fingerprints():
+            if (parent_cfg.get("code_fingerprints") != code_fingerprints()
+                    and not source_transition(parent_cfg.get("code_fingerprints"), code_fingerprints())):
                 raise ValueError("Common parent source code differs from the selected adjust1 implementation")
             for key in ("margin_arc", "margin_am", "scale"):
                 if parent_cfg["head"].get(key) != cfg["parent_head"][key]:

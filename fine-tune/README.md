@@ -94,7 +94,14 @@ SurvFace calibration gallery와 등록 probe는 FR 학습 인물에서 구성되
 - RESUME_CHECKPOINTS는 이번 namespace의 run ID → 정확한 checkpoint 경로다.
 - KEEP_RAW_RESULTS=True는 이번 run의 상세 checkpoint를 보존한다. False는 Trainer의 현재 run 보존 정책을 따르며
   입력 dataset, 공유 전처리, 부모 가중치, 과거 실패 기록을 삭제하지 않는다. 최종 모델·집계·출처는 남긴다.
-- data_integrity=content_verified_reuse는 현재 이미지 바이트 hash를 확인한 뒤 같은 계약의 decode 검사만 재사용한다.
+- 노트북 기본 `DATA_INTEGRITY_MODE="immutable_verified_reuse"`는 최초 전체 검증 이후 완료 JSON을 재사용한다.
+  사용자는 검증된 원본·전처리 이미지와 목록을 임의로 변경하지 않는다는 전제다.
+  매번 report/목록/manifest/정책·검증 코드의 일치 여부는 확인하지만 개별 이미지 파일은 다시 읽지 않는다.
+  이미지 내용 변경·손상을 자동으로 탐지한다는 뜻은 아니다.
+- 00–04 첫 설정 셀의 `FORCE_DATA_REVERIFY=False`는 일치하는 검증 기록을 재사용한다.
+  `True`는 해당 검증 호출에서 전체 이미지 hash+decode를 강제한다. 사용 후 False로 되돌린다.
+  Python/설정 JSON에서는 `data_integrity.force_reverify`에 같은 bool을 지정한다.
+  `content_verified_reuse`는 종전처럼 매번 이미지 hash를 확인하고 decode만 재사용하며, `full`은 매번 둘 다 수행한다.
 - ArcFace/MagFace의 target-only FP32 exact-boundary safeguard와 MagFace adaptive-margin graph를 유지한다.
   비유한 loss/gradient는 중단·기록한다. 이번 경로 변경으로 수식이나 augmentation 조건을 바꾸지 않는다.
 
@@ -106,6 +113,34 @@ SurvFace calibration gallery와 등록 probe는 FR 학습 인물에서 구성되
 원본의 과거 생성 이력은 추정하지 않는다. 압축 해제 성공은 얼굴 검출이나 전 이미지 decode 성공을 뜻하지 않는다.
 목적지 lock으로 동시 작성을 막고 완료 표시를 확인한 후 학습에 연결한다. lock을 자동 삭제하지 않는다.
 완료 산출물과 다른 조건은 새 버전을 사용한다. 이 기록은 정식 학습이나 인식 성능 결과가 아니다.
+
+### 검증 완료 기록과 중단 학습 재개
+
+검증 기록은 전처리 report 옆 `verification_cache/immutable_v1/<계약 SHA-256>.json`에 저장된다.
+`status=completed`, `verified_images`, 검증 계약·근거, 기록 자체의 hash가 있어야 재사용한다.
+기존 `image-decode-receipt-v1`도 현재 report/목록/manifest/정책/검증 코드/라이브러리와
+완전히 일치하면 최초 전체 검증의 근거로 가져온다. 기존 기록과 전처리 결과는 수정하지 않는다.
+강제 검사 전의 기록은 `immutable_v1/history/`에 보존한다. 검사 실패·중단 기록이 있으면
+예전 성공으로 돌아가지 않으며, 원인을 해결하고 `FORCE_DATA_REVERIFY=True`로 다시 검사한다.
+완료된 전처리를 `RESUME_PREPROCESSING=True`로 열어도 같은 정책을 적용한다.
+미완료 전처리의 복구는 기존 이미지별 검증·복구 절차를 유지한다.
+
+기록은 준비 데이터의 재사용 cache이며 `KEEP_RAW_RESULTS` 삭제 대상이 아니다. 외부 dataset
+root에 보존하므로 Git에 원본 이미지/상세 manifest를 추가하지 않는다. 실행 checkpoint/export의
+`data_integrity_verification`에는 재사용 여부, 이번 이미지 검사 수, receipt 경로/hash와 한계를 남긴다.
+`REUSED (0 image files read)` 출력은 검증 단계의 이미지 파일 재읽기가 없다는 뜻이다.
+목록 확인·metadata hash·DataLoader/모델 초기화와 실제 학습용 이미지 읽기에는 별도 시간이 든다.
+
+02를 중단할 때는 Interrupt 후 안전 저장 완료와 자식 프로세스 종료를 확인한다. 재개는
+`RESUME_CHECKPOINTS={"pretrain_arcface_seed8972": r"정확한 복구 checkpoint 경로"}`로 지정한다.
+기존 설정 JSON을 그대로 사용해도 02의 새 검증 변수 override가 적용되므로 00/01 재실행은 필요 없다.
+모듈 수정 후 커널을 재시작하고 02 첫 셀부터 실행한다. 현재 노트북의 checkpoint 경로는
+이번 안전 중단 파일로 명시되어 있으므로 다른 seed/namespace의 새 실행에는 해당 값을 수정한다.
+
+이번 검증 정책 변경 전 checkpoint는 `configs/verification_resume_compatibility.json`의
+정확한 이전→현재 코드 hash 조합에 한해서 재개를 허용한다. 모델·데이터·optimizer 등 학습
+설정은 완전히 같아야 하며, 새 checkpoint의 `resume_source`에 전환과 원본 hash를 기록한다.
+이 허용은 일반적인 코드/학습 조건 변경 우회가 아니다. 원본 checkpoint를 재작성하지 않는다.
 
 기존 완료 run/report는 불변이다. 기본 경로는 새 namespace이므로 과거 shared_parent 결과를 재개하지 않는다.
 GPU 정식 실행 전에 CUDA와 장치를 확인한다. Linux/A100 실제 실행 검증은 별도이며 Windows 경로 검증과 구분한다.

@@ -734,8 +734,11 @@ def compare_configs(
 
     # 6. Global identifiers
     # Research policy is never waived by legacy/partial config compatibility.
+    from .checkpoint_compatibility import source_transition
     for key in ("baseline_version", "code_fingerprints"):
         if ckpt_cfg.get(key) != current_cfg.get(key):
+            if key == "code_fingerprints" and source_transition(ckpt_cfg.get(key), current_cfg.get(key)):
+                continue
             mismatches.append(f"{key} mismatch")
     for key in ("alignment", "alignment_policy", "augmentation", "color"):
         if ckpt_pre.get(key) != curr_pre.get(key):
@@ -754,6 +757,75 @@ def compare_configs(
                 _diff_val(f"Global {key}", ckpt_cfg[key], current_cfg[key])
 
     return mismatches
+
+
+def validate_resume_state(checkpoint, model, optimizer=None, scheduler=None):
+    """Reject incomplete formal training state before modifying the live model."""
+    def invalid(name):
+        raise ValueError(f"[Resume State Error] Missing or invalid {name}")
+
+    for name, module in (("backbone_state_dict", model.backbone), ("head_state_dict", model.head)):
+        state = checkpoint.get(name)
+        expected = module.state_dict()
+        if not isinstance(state, dict) or set(state) != set(expected):
+            invalid(name)
+        for key, value in expected.items():
+            if (not torch.is_tensor(state[key]) or state[key].shape != value.shape
+                    or state[key].dtype != value.dtype):
+                invalid(f"{name}.{key}")
+    if optimizer is not None:
+        state = checkpoint.get("optimizer_state_dict")
+        if (not isinstance(state, dict) or not isinstance(state.get("state"), dict)
+                or not isinstance(state.get("param_groups"), list) or not state["param_groups"]):
+            invalid("optimizer_state_dict")
+        groups = state["param_groups"]
+        if len(groups) != len(optimizer.param_groups) or any(
+                not isinstance(g, dict) or not isinstance(g.get("params"), list)
+                or len(g["params"]) != len(live["params"])
+                for g, live in zip(groups, optimizer.param_groups)):
+            invalid("optimizer_state_dict.param_groups")
+    if scheduler is not None:
+        state = checkpoint.get("scheduler_state_dict")
+        if not isinstance(state, dict) or not set(scheduler.state_dict()).issubset(state):
+            invalid("scheduler_state_dict")
+        if type(state.get("last_epoch")) is not int or state["last_epoch"] < -1:
+            invalid("scheduler_state_dict.last_epoch")
+    for name in ("epoch", "batch_idx"):
+        if type(checkpoint.get(name)) is not int or checkpoint[name] < 0:
+            invalid(name)
+    meta = checkpoint.get("extra_meta", checkpoint.get("metadata", {}))
+    epoch_state = meta.get("epoch_state")
+    if checkpoint["batch_idx"] > 0 and epoch_state is None:
+        invalid("epoch_state for mid-epoch recovery")
+    if epoch_state is not None:
+        if (not isinstance(epoch_state, dict)
+                or type(epoch_state.get("epoch")) is not int
+                or epoch_state["epoch"] != checkpoint["epoch"] + 1
+                or type(epoch_state.get("next_batch")) is not int
+                or epoch_state["next_batch"] != checkpoint["batch_idx"]
+                or type(epoch_state.get("loss_count")) is not int
+                or epoch_state["loss_count"] < 0
+                or not isinstance(epoch_state.get("loss_sum"), (int, float))
+                or not np.isfinite(epoch_state["loss_sum"])):
+            invalid("epoch_state")
+    rng = checkpoint.get("rng_state")
+    if not isinstance(rng, dict) or not {"torch_rng", "numpy_rng", "python_rng", "cuda_rng"}.issubset(rng):
+        invalid("rng_state")
+    # Probe isolated generators, without changing the process RNG on rejection.
+    try:
+        torch.Generator(device="cpu").set_state(rng["torch_rng"])
+        np.random.RandomState().set_state(rng["numpy_rng"])
+        random.Random().setstate(rng["python_rng"])
+    except (TypeError, ValueError, RuntimeError, KeyError) as exc:
+        raise ValueError("[Resume State Error] Invalid rng_state") from exc
+    cuda_rng = rng["cuda_rng"]
+    cuda_model = any(p.is_cuda for p in model.parameters())
+    if cuda_rng is not None and (not isinstance(cuda_rng, (list, tuple)) or any(
+            not torch.is_tensor(s) or s.dtype != torch.uint8 or s.ndim != 1 or not s.numel()
+            for s in cuda_rng)):
+        invalid("rng_state.cuda_rng")
+    if cuda_model and (not cuda_rng or len(cuda_rng) != torch.cuda.device_count()):
+        invalid("rng_state.cuda_rng device coverage")
 
 
 class CheckpointManager:
@@ -1059,12 +1131,21 @@ class CheckpointManager:
 
             if ckpt_hash and expected_config is not None:
                 expected_hash = effective_curr_cfg.get("config_hash") or compute_config_hash(effective_curr_cfg)
-                if ckpt_hash != expected_hash:
+                from .checkpoint_compatibility import verification_only_transition
+                transition = verification_only_transition(ckpt_cfg, effective_curr_cfg)
+                if transition:
+                    logger.info(f"Verified validation-only source transition: {transition}; training configuration unchanged.")
+                    meta["verification_source_transition"] = dict(id=transition,
+                        previous_config_hash=ckpt_hash, current_config_hash=expected_hash)
+                if ckpt_hash != expected_hash and not transition:
                     logger.error(f"[Resume Config Error] Config hash mismatch! Checkpoint: {ckpt_hash}, Current: {expected_hash}")
                     raise ValueError(
                         f"[Resume Config Error] Config hash mismatch! Checkpoint has hash '{ckpt_hash}', "
                         f"but current configuration produces hash '{expected_hash}'."
                     )
+
+        if is_strict:
+            validate_resume_state(checkpoint, raw_model, optimizer, scheduler)
 
         try:
             # Load backbone & head
@@ -1103,6 +1184,8 @@ class CheckpointManager:
                 try:
                     torch.cuda.set_rng_state_all(rng["cuda_rng"])
                 except Exception as e:
+                    if is_strict:
+                        raise ValueError("[Resume State Error] Could not restore CUDA RNG states") from e
                     logger.warning(f"Could not restore CUDA RNG states: {e}")
             if "numpy_rng" in rng and rng["numpy_rng"] is not None:
                 np.random.set_state(rng["numpy_rng"])
