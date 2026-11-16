@@ -209,4 +209,35 @@ Git에 커밋하지 않는다. metadata 기록은 매 시도마다 늘어나므�
 
 전처리 자식 프로세스의 stdout/stderr는 노트북과 launch ticket의 `console.log`에 함께 기록한다.
 실패 시 해당 로그의 원본 traceback을 확인한다. 커널 재시작으로 변경된 process_runner를 로드한다.
-노트북에서 interrupt하면 자식 프로세스를 종료하고 산출물을 보존하며, 다음 실행에서 재개 검증한다.
+
+### UCFace baseline 검토와 기존 연구 모델 보존
+
+2026-11-15 수정: 03·04 기본값은 `CAMPAIGN="ucface_review"`, `EXECUTE=False`다. 커널을 재시작하고 Run All 하면 현재 checkpoint와 재현 차이를 읽기 전용으로 확인한다. `ucface_review`에서 `EXECUTE=True`만 바꾸어도 학습/export를 시작하지 않는다. 이는 재현 조건이 미확정인 현재 상태를 표시하며, 실행 승인을 요구하는 스위치가 아니다. 기존 셀 출력은 이전 실행 기록이다.
+
+원래 목표는 UCFace Table I의 일반 ArcFace/CosFace/MagFace/AdaFace baseline과 압축 전 성능을 비교하는 것이다. `continuous_margin`은 이 목표에 포함되지 않는다. 기본 12개 후보는 SCFace 두 눈 정렬 4개, TinyFace PFLD 5점 정렬 4개, SurvFace resize 4개이며 모든 seed는 8972다. SurvFace ArcFace는 기존 `margin_am=0` checkpoint를 참조한다. 저자 답변의 FaceX-Zoo 관행과 본문 명시 조건을 우선하며, 성능을 올리기 위한 임의 loss 변경을 기본 조건에 추가하지 않는다.
+
+본문 IV-A.3(인쇄면 7181)은 주요 실험을 1024D로 명시한다. 부록 Table XVII의 MobileFaceNet 512D는 별도 실험이다. 2026-11-15 사용자가 전달한 저자의 기억 기반 이메일은 MobileFaceNet 512D를 언급하지만, Table I 비교에는 본문·부록의 명시된 1024D를 적용한다. 기존 parent를 이 이유만으로 폐기하지 않는다.
+
+후보들은 **현재 연구의 로컬 조건**이다. SurvFace FR 학습은 4,255명/176,205장이고, 논문 부록 Table IX의 학습은 5,319명/220,888장이다. SCFace는 50명/800장으로 수량이 맞지만 저자가 실제 사용한 인물 명단은 미확인이다. 두 눈 정렬/PFLD 세부 정책도 저자의 코드로 확인된 것이 아니다. 따라서 `exact_ucface_reproduction=False`를 유지한다. 논문 규모의 SurvFace를 만들 때는 별도 FR protocol과 출력 루트를 사용해야 하며, 그 모델을 기존 FR 제외 1,064명의 보정 실험에 그대로 연결하지 않는다.
+
+### 필요한 모델만 이어가는 selected 경로
+
+`CAMPAIGN="selected"`는 위 차이를 명시한 **기존 연구 조건의 재개**다. UCFace 동일 재현이 확인된 상태를 뜻하지 않는다. `EXPERIMENT_PURPOSE="local_protocol_baseline"`을 사용한다. 03과 04는 `plans/selection_v2_local_protocol.json`을 공유한다. 기존 `selection_v1.json`은 보존·읽기만 허용하며 실행은 거부한다. 노트북에 남은 이전 모듈도 자식 프로세스에서 다시 검사한다.
+
+1. `EXECUTE=False`로 03을 Run All 하고 `reuse_completed`, `resume`, `train_new`, `blocked` 및 `UCFace 재현 검토`를 확인한다. parent·seed·분할·전처리·훈련 설정·SHA가 맞는 checkpoint만 재사용한다.
+2. 기존 연구 조건을 이어갈 경우에만 `selected`, `EXECUTE=True`로 실행한다. 검증된 완료 모델은 건너뛰며, 명시된 `SELECTED_RESUME_CHECKPOINTS`에서 이어간다. 현재 TinyFace CosFace의 검증된 복구 경로가 입력되어 있다. 조건을 변경한 모델에 과거 checkpoint를 연결하지 않는다.
+3. `RUN_PREPROCESSING=False`, `DATA_INTEGRITY_MODE="immutable_verified_reuse"`, `FORCE_DATA_REVERIFY=False`는 완료 전처리 기록·목록·manifest를 재사용한다. 이미지 자체를 이후 변경하지 않는다는 전제다. 명시적 재검증 또는 full/content_verified_reuse에서는 hash+decode를 수행한다. 실패한 검증은 성공하기 전까지 차단한다.
+4. 전체 선택 모델 완료 후 04에서 `CAMPAIGN="selected"`와 같은 선택 파일로 export한다. 기존 export 바이트/UID를 보존한다. 새 export는 가중치·설정·정렬 좌표와 hash를 검증한 뒤 게시한다. 미완료 모델이 있으면 전체 inventory 게시를 거부한다.
+5. ronbun 02에는 완료 `facex-model-inventory-v2`의 정확한 경로와 `INVENTORY_PURPOSE="local_protocol_baseline"`을 지정한다. 새 YAML의 `model_scope`는 연구 조건과 미확인 재현 범위를 기록한다. `INVENTORY_ORIGIN_ONLY=True`가 기본이므로 먼저 Origin만 평가한다. 그 결과를 확인한 후 False와 새 YAML 경로로 PCA/PQ를 비교한다. ronbun의 `study.stage="baseline"`은 압축·보정 실험 단계이며 UCFace 재현 인증이 아니다.
+
+새 seed/head는 TRAINING_PLAN에 추가하고 새 selection 파일을 사용한다. 동일 조건이라면 같은 출력 루트를 유지하여 완료 결과를 재사용한다. 학습 조건·분할 변경은 별도 출력 루트를 사용한다. 00/01/02를 일괄 반복할 이유는 없다. 데이터 원본·전처리·checkpoint·완료 결과를 덮어쓰지 않는다.
+
+`continuous_margin`은 선택형 진단 API에만 남아 있다. `purpose="diagnostic_control"`이 필요하며 기본 baseline 목록과 ronbun baseline inventory에 섞을 수 없다. 기본 노트북에서 `survface_margin` 선택지를 제거했다. 정렬 모델은 변환 파일이 포함된 자기 데이터셋 평가만 허용하며, LFW/RFW는 학습 대상이 아니다.
+
+### 중단·보존·결과 해석
+
+Interrupt는 stop 요청을 보내며, Trainer는 완료 optimizer step에서 모델/head/optimizer/scheduler/RNG 및 다음 batch 위치를 저장한다. 강제 종료와 구분한다. 정상 중단 후 lock은 해제되며, 강제 종료 후에는 소유 PID 종료를 확인하기 전 삭제하지 않는다. 잠금 경로는 `SELECTED_ROOT/campaign.lock` 및 해당 checkpoint 디렉터리 옆 `.lock`이다.
+
+`KEEP_RAW_RESULTS`는 기존 Trainer 보존 정책을 유지한다. True는 주기 checkpoint를 보존하며 False는 이번 실행의 오래된 중간 checkpoint를 최소 보존 정책에 따라 정리한다. 입력 원본·공유 전처리·parent·기존 완료 모델은 삭제 대상이 아니다. 실행 전 참조 checkpoint 크기와 저장 주기로 공간을 추정하며, 시도별 계획·진행·오류·미실행 범위는 `attempts/<id>/`에 남긴다. 완료 inventory와 출처 요약은 상세 결과 보존 여부와 무관하게 남긴다.
+
+대용량 원본은 외부 모델 루트에 두고 Git에 넣지 않는다. 이 안내와 JSON 계획·완료 inventory로 모델 수, 실행 상태, 분할 차이, 출처를 분석할 수 있다. 상세 학습 곡선은 원본 기록이 필요하며 계획/테스트만으로 정확도나 학습 완료를 판단하지 않는다. 먼저 Origin cosine Rank-1(TinyFace/SCFace), TPIR@20와 실제 FPIR(SurvFace)을 평가한다. 논문 시험 ROC 비교와 독립 fit/safety 보정 실험을 구분하며, 압축 후에는 해당 점수 공간의 Global-safe 대비 보정을 평가한다. TPIR에는 순위와 genuine score 통과가 모두 필요하고, 목표 FPIR 충족은 반올림 전 값으로 판단한다.

@@ -84,11 +84,19 @@ def main():
     args = parser.parse_args()
     request = json.loads(Path(args.request).read_text(encoding="utf-8"))
     cfg = request["settings"]
+    from modules.ucface_reference import validate_campaign_purpose
+    validate_campaign_purpose(cfg, request["stage"], request.get("selection"))
     runtime = cfg["runtime"]
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                         handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler(runtime["log_file"], encoding="utf-8")], force=True)
     from modules.notebook_workflow import run_training_matrix, export_matrix, validate_settings
     validate_settings(cfg)
+    if "selection" in request:
+        from modules.selected_campaign import execute_selection
+        result = execute_selection(request["selection"], request["stage"], request["resume"], runtime,
+                                   request.get("force_reverify", False))
+        Path(runtime["result_file"]).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        return
     lock = Path(cfg["paths"]["checkpoint_dir"]) / ".campaign.lock"
     lock.parent.mkdir(parents=True, exist_ok=True)
     # Explicit lock removal is required after a hard-killed process; never assume

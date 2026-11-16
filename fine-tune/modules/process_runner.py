@@ -59,7 +59,9 @@ def _stream_alignment(cmd, root, log_path):
 
 
 def launch_campaign(base_dir, cfg, stage, resume_checkpoints=None, smoke=False,
-                    benchmark_workers=None, benchmark_steps=100):
+                    benchmark_workers=None, benchmark_steps=100, selection=None, force_reverify=False):
+    from .ucface_reference import validate_campaign_purpose
+    validate_campaign_purpose(cfg, stage, selection)
     root = Path(base_dir)
     ticket = Path(cfg["paths"].get("launch_dir", root / "fine-tune/data/launches")) / uuid.uuid4().hex
     ticket.mkdir(parents=True)
@@ -69,6 +71,10 @@ def launch_campaign(base_dir, cfg, stage, resume_checkpoints=None, smoke=False,
                             "result_file": str(ticket / "result.json")}
     request = {"settings": effective, "stage": stage, "resume": resume_checkpoints or {}, "smoke": smoke,
                "benchmark_workers": benchmark_workers, "benchmark_steps": benchmark_steps}
+    if selection is not None:
+        if smoke or benchmark_workers:
+            raise ValueError("Selected campaigns require formal training/export")
+        request.update(selection=selection, force_reverify=force_reverify)
     request_path = ticket / "request.json"
     request_path.write_text(json.dumps(request, ensure_ascii=False, indent=2), encoding="utf-8")
     cmd = [sys.executable, "-u", str(root / "fine-tune/scripts/run_campaign.py"), "--request", str(request_path)]
