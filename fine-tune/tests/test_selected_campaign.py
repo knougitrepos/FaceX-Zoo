@@ -240,3 +240,43 @@ def test_selected_training_resume_matches_uninterrupted(cfg, tmp_path, monkeypat
         for name, tensor in expected[key].items():
             assert torch.equal(tensor, actual[key][name]), name
     assert actual['completed'] is True and actual['epoch'] == 2
+
+
+def test_paper_baseline_selection_and_survface_diagnostics(tmp_path):
+    settings_path = Path("F:/face_datasets/.state/facex/shared_v1_boundary/notebook_settings_mobilefacenet.json")
+    if not settings_path.exists():
+        pytest.skip("Pinned campaign settings unavailable")
+    base = s.w.resolve_settings(Path(__file__).resolve().parents[2], settings_path, require_saved=True)
+    plan_rows = s.paper_baseline_plan("full_fr_resize_only", ["arcface", "cosface", "magface", "adaface"], [8972])
+    selection = s.make_selection(
+        base,
+        plan_rows,
+        tmp_path / "paper_baseline_out",
+        Path("F:/models/facex/diagnostics") / s.ALIGNMENT_CONTROL,
+        reuse_completed=True,
+        purpose="paper_baseline",
+    )
+    selection["references"] = s.default_references(selection)
+    assert selection["reproduction_scope"]["purpose"] == "paper_baseline"
+    assert selection["reproduction_scope"]["populations"]["survface"]["local_training"] == [5319, 220888]
+    assert selection["reproduction_scope"]["populations"]["survface"]["counts_match"] is True
+    assert selection["reproduction_scope"]["calibration_unseen_in_fr"] is False
+
+    from modules.ucface_reference import reproduction_review, require_reproduction_ready
+    review = reproduction_review(selection)
+    assert review["purpose"] == "paper_baseline"
+    assert review["training_ready"] is True
+    require_reproduction_ready(selection)
+
+    inspected = s.inspect_selection(selection)
+    status_by_ds = {}
+    for row in inspected:
+        status_by_ds.setdefault(row["dataset"], []).append(row["status"])
+    assert status_by_ds["scface"] == ["reuse_completed"] * 4
+    assert status_by_ds["tinyface"] == ["reuse_completed"] * 4
+    assert status_by_ds["survface"] == ["train_new"] * 4
+
+    from modules.survface_paper import parent_origin_comparison
+    comparison = parent_origin_comparison()
+    assert comparison["parent_active_dims"] == 79
+    assert comparison["parent_survface_origin"]["10%"]["tpir20"] > comparison["finetuned_4255_resize_only"]["arcface"]["tpir20_at_fpir10"]

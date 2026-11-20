@@ -29,7 +29,7 @@ from .checkpoint_manager import (
 )
 from .dataset import VGGFace2ArchiveInspector, build_dataloader, validate_dataset_files, resolve_image_path
 from .model_builder import build_model
-from .trainer import Trainer, set_seed, TrainingStopped
+from .trainer import Trainer, set_seed, TrainingStopped, EpochLimitReached
 from .backbone_factory import backbone_slug, canonical_backbone_type, baseline_learning_rate
 from .finetune_protocol import default_profiles, verify_protocol
 from .baseline_policy import VERSION, DEFAULT_AUGMENTATION, validate_augmentation, code_fingerprints
@@ -559,7 +559,15 @@ def _run_one(cfg, row, resume_path=None, smoke=False):
                 snapshot = run_dir / f"resume_settings_{uuid.uuid4().hex}.json"
             write_json(snapshot, cfg, immutable=True)
             prefix = f"{stage}_{backbone_slug(cfg['backbone'])}_{cfg['backbone']['feat_dim']}d" + (f"_{head}" if stage == "finetune" else "")
-            trainer.train(start_epoch=start, model_prefix=prefix)
+            try:
+                trainer.train(start_epoch=start, model_prefix=prefix)
+            except EpochLimitReached:
+                return {**row, "status": "paused_epoch_limit", "completed": False,
+                        "checkpoint": trainer.last_saved_ckpt,
+                        "sha256": compute_sha256(trainer.last_saved_ckpt),
+                        "epoch": trainer.cur_epoch, "next_epoch": trainer.cur_epoch + 1,
+                        "total_epochs": trainer.total_epochs, "config_hash": trainer.config_hash,
+                        "keep_raw_results": trainer.keep_raw_results, "device": str(device)}
             trainer.save_state_checkpoint(final_path.name, epoch=trainer.cur_epoch,
                                           extra_meta={"execution_settings": cfg})
             status = "completed"

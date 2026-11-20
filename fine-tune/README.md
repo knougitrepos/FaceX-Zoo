@@ -210,29 +210,36 @@ Git에 커밋하지 않는다. metadata 기록은 매 시도마다 늘어나므�
 전처리 자식 프로세스의 stdout/stderr는 노트북과 launch ticket의 `console.log`에 함께 기록한다.
 실패 시 해당 로그의 원본 traceback을 확인한다. 커널 재시작으로 변경된 process_runner를 로드한다.
 
-### UCFace baseline 검토와 기존 연구 모델 보존
+### UCFace baseline 검토와 캠페인 분리 (`paper_baseline` vs `selected`)
 
-2026-11-15 수정: 03·04 기본값은 `CAMPAIGN="ucface_review"`, `EXECUTE=False`다. 커널을 재시작하고 Run All 하면 현재 checkpoint와 재현 차이를 읽기 전용으로 확인한다. `ucface_review`에서 `EXECUTE=True`만 바꾸어도 학습/export를 시작하지 않는다. 이는 재현 조건이 미확정인 현재 상태를 표시하며, 실행 승인을 요구하는 스위치가 아니다. 기존 셀 출력은 이전 실행 기록이다.
+2026-11-16 수정: 03·04 기본값은 `CAMPAIGN="ucface_review"`, `EXECUTE=False`다. 커널을 재시작하고 Run All 하면 현재 checkpoint 상태, UCFace 재현 조건 차이, parent vs fine-tuned Origin 진단 요약을 읽기 전용으로 확인한다.
 
-원래 목표는 UCFace Table I의 일반 ArcFace/CosFace/MagFace/AdaFace baseline과 압축 전 성능을 비교하는 것이다. `continuous_margin`은 이 목표에 포함되지 않는다. 기본 12개 후보는 SCFace 두 눈 정렬 4개, TinyFace PFLD 5점 정렬 4개, SurvFace resize 4개이며 모든 seed는 8972다. SurvFace ArcFace는 기존 `margin_am=0` checkpoint를 참조한다. 저자 답변의 FaceX-Zoo 관행과 본문 명시 조건을 우선하며, 성능을 올리기 위한 임의 loss 변경을 기본 조건에 추가하지 않는다.
+연구 목적에 따라 세 가지 캠페인 경로를 구분한다.
 
-본문 IV-A.3(인쇄면 7181)은 주요 실험을 1024D로 명시한다. 부록 Table XVII의 MobileFaceNet 512D는 별도 실험이다. 2026-11-15 사용자가 전달한 저자의 기억 기반 이메일은 MobileFaceNet 512D를 언급하지만, Table I 비교에는 본문·부록의 명시된 1024D를 적용한다. 기존 parent를 이 이유만으로 폐기하지 않는다.
+| 캠페인 (`CAMPAIGN`) | `EXPERIMENT_PURPOSE` | SurvFace 학습 분할 | SCFace (4개) · TinyFace (4개) | 용도 및 보정 분리 여부 |
+| --- | --- | --- | --- | --- |
+| `"ucface_review"` | `"local_protocol_baseline"` | 검토 전용 (`EXECUTE=False` 고정) | 완료 모델 상태 확인 | 재현 조건 차이 및 parent/checkpoint 진단 확인 |
+| `"paper_baseline"` | `"paper_baseline"` | **5,319명 / 220,888장** (`paper_full_fr_training_v1`) | 완료 정렬 모델 8개 자동 재사용 (`reuse_completed`) | UCFace Table I Origin 비교 전용 (`calibration_unseen_in_fr=False`, 보정 실험 연결 차단) |
+| `"selected"` | `"local_protocol_baseline"` | **4,255명 / 176,205장** (`fr_train_only_4255_from_5319`) | 완료 정렬 모델 8개 + 기존 SurvFace 4개 = 12개 모두 완료 (`reuse_completed`) | FR-unseen 보정 인물(1,064명) 분리 연구 경로 (`calibration_unseen_in_fr=True`) |
 
-후보들은 **현재 연구의 로컬 조건**이다. SurvFace FR 학습은 4,255명/176,205장이고, 논문 부록 Table IX의 학습은 5,319명/220,888장이다. SCFace는 50명/800장으로 수량이 맞지만 저자가 실제 사용한 인물 명단은 미확인이다. 두 눈 정렬/PFLD 세부 정책도 저자의 코드로 확인된 것이 아니다. 따라서 `exact_ucface_reproduction=False`를 유지한다. 논문 규모의 SurvFace를 만들 때는 별도 FR protocol과 출력 루트를 사용해야 하며, 그 모델을 기존 FR 제외 1,064명의 보정 실험에 그대로 연결하지 않는다.
+본문 IV-A.3(인쇄면 7181)은 주요 실험을 1024D로 명시하며, 부록 Table XVII의 MobileFaceNet 512D는 별도 실험이다. Table I 비교에는 본문·부록의 명시된 1024D를 적용한다.
 
-### 필요한 모델만 이어가는 selected 경로
+### 1. UCFace 논문 규모 SurvFace 학습 경로 (`CAMPAIGN="paper_baseline"`)
 
-`CAMPAIGN="selected"`는 위 차이를 명시한 **기존 연구 조건의 재개**다. UCFace 동일 재현이 확인된 상태를 뜻하지 않는다. `EXPERIMENT_PURPOSE="local_protocol_baseline"`을 사용한다. 03과 04는 `plans/selection_v2_local_protocol.json`을 공유한다. 기존 `selection_v1.json`은 보존·읽기만 허용하며 실행은 거부한다. 노트북에 남은 이전 모듈도 자식 프로세스에서 다시 검사한다.
+기존 `selected` 실행에서 SurvFace 성능이 동일했던 직접 원인은 4개 모델 모두 4,255명/176,205장(`resize_only`)의 11월 10~11일 체크포인트를 그대로 재사용했기 때문이며, 아울러 fine-tune 초기부터 parent(유효 활성 차원 79/1024) 위에서 ArcFace 예외 분기(`cos(theta) <= -0.8253`, 96.0%) 및 CosFace/MagFace/AdaFace의 소수 차원 BN running_var 폭주(8.5~10.4% 비등록자 스파이크)가 발생했음을 확인했다.
 
-1. `EXECUTE=False`로 03을 Run All 하고 `reuse_completed`, `resume`, `train_new`, `blocked` 및 `UCFace 재현 검토`를 확인한다. parent·seed·분할·전처리·훈련 설정·SHA가 맞는 checkpoint만 재사용한다.
-2. 기존 연구 조건을 이어갈 경우에만 `selected`, `EXECUTE=True`로 실행한다. 검증된 완료 모델은 건너뛰며, 명시된 `SELECTED_RESUME_CHECKPOINTS`에서 이어간다. 현재 TinyFace CosFace의 검증된 복구 경로가 입력되어 있다. 조건을 변경한 모델에 과거 checkpoint를 연결하지 않는다.
-3. `RUN_PREPROCESSING=False`, `DATA_INTEGRITY_MODE="immutable_verified_reuse"`, `FORCE_DATA_REVERIFY=False`는 완료 전처리 기록·목록·manifest를 재사용한다. 이미지 자체를 이후 변경하지 않는다는 전제다. 명시적 재검증 또는 full/content_verified_reuse에서는 hash+decode를 수행한다. 실패한 검증은 성공하기 전까지 차단한다.
-4. 전체 선택 모델 완료 후 04에서 `CAMPAIGN="selected"`와 같은 선택 파일로 export한다. 기존 export 바이트/UID를 보존한다. 새 export는 가중치·설정·정렬 좌표와 hash를 검증한 뒤 게시한다. 미완료 모델이 있으면 전체 inventory 게시를 거부한다.
-5. ronbun 02에는 완료 `facex-model-inventory-v2`의 정확한 경로와 `INVENTORY_PURPOSE="local_protocol_baseline"`을 지정한다. 새 YAML의 `model_scope`는 연구 조건과 미확인 재현 범위를 기록한다. `INVENTORY_ORIGIN_ONLY=True`가 기본이므로 먼저 Origin만 평가한다. 그 결과를 확인한 후 False와 새 YAML 경로로 PCA/PQ를 비교한다. ronbun의 `study.stage="baseline"`은 압축·보정 실험 단계이며 UCFace 재현 인증이 아니다.
+1. 03 첫 설정 셀에서 `CAMPAIGN="paper_baseline"`을 선택한다.
+   - `SURVFACE_PAPER_RECIPE`: `"full_fr_resize_only"`(논문 Table I 기본, 기존 검증된 176,205장 PNG를 재사용하고 추가 1,064명/44,683장만 생성하여 총 220,888장 구성 완료) 또는 `"full_fr_pfld_five_point_alignment"`(5점 정렬 비교 대조군).
+   - `SURVFACE_HEADS`: 기본 `["arcface", "cosface", "magface", "adaface"]`. 초기 epoch 진단을 위해 `["arcface"]` 등 일부 head만 먼저 지정해 단계별로 실행할 수 있다.
+2. 먼저 `EXECUTE=False`로 03을 Run All 하여 SCFace 4개·TinyFace 4개가 `reuse_completed`이고 SurvFace 대상만 `train_new`인지, `reproduction_review(selection)["training_ready"] == True`인지 확인한다.
+3. `EXECUTE=True`로 03을 실행하면 `F:/face_datasets/QMUL-SurvFace/protocols/paper_baseline_v1/5319_full_fr_v1/protocol.json`(`5,319 IDs / 220,888 images`)과 전처리 완료 상태를 확인한 뒤 SurvFace만 새로 학습한다.
+4. 학습 중 또는 완료 후 `modules.survface_paper.diagnose_survface_checkpoint(checkpoint_path)`로 유효 차원 수(`active_dims_count`), BN 최대 분산(`bn_running_var_max`), 비등록자 고점수 비율(`unknown_max_cos_ge_095_ratio`), ArcFace 예외 분기 비율(`arcface_outside_cone_ratio`)을 점검할 수 있다.
+5. 학습 완료 후 04에서 `CAMPAIGN="paper_baseline"`, `EXECUTE=True`로 실행하면 완료된 8개 정렬 export를 재사용하고 새 SurvFace 모델을 export하여 `MODEL_INVENTORY`(`purpose="paper_baseline"`)를 출력한다.
+6. `C:\ronbun\notebooks\02_inputs.ipynb`에서 `INVENTORY_PURPOSE="paper_baseline"`, `INVENTORY_ORIGIN_ONLY=True`로 설정해 Origin 성능을 평가한다. 이 경로는 1,064명 보정 인물이 FR 학습에 포함되어 있으므로 `INVENTORY_ORIGIN_ONLY=False`(PCA/PQ 및 threshold 보정 실험) 설정 시 자동으로 차단된다.
 
-새 seed/head는 TRAINING_PLAN에 추가하고 새 selection 파일을 사용한다. 동일 조건이라면 같은 출력 루트를 유지하여 완료 결과를 재사용한다. 학습 조건·분할 변경은 별도 출력 루트를 사용한다. 00/01/02를 일괄 반복할 이유는 없다. 데이터 원본·전처리·checkpoint·완료 결과를 덮어쓰지 않는다.
+### 2. 보정 분리 연구 조건 경로 (`CAMPAIGN="selected"`)
 
-`continuous_margin`은 선택형 진단 API에만 남아 있다. `purpose="diagnostic_control"`이 필요하며 기본 baseline 목록과 ronbun baseline inventory에 섞을 수 없다. 기본 노트북에서 `survface_margin` 선택지를 제거했다. 정렬 모델은 변환 파일이 포함된 자기 데이터셋 평가만 허용하며, LFW/RFW는 학습 대상이 아니다.
+`CAMPAIGN="selected"`는 FR 학습에서 1,064명 보정 인물을 제외한 기존 연구 조건(`EXPERIMENT_PURPOSE="local_protocol_baseline"`)이다. 03과 04는 `plans/selection_v2_local_protocol.json`을 공유한다. TinyFace CosFace까지 40 epoch 완료되어 12개 후보 전체가 `reuse_completed` 상태이며 `SELECTED_RESUME_CHECKPOINTS = {}`로 정리되었다.
 
 ### 중단·보존·결과 해석
 
@@ -241,3 +248,13 @@ Interrupt는 stop 요청을 보내며, Trainer는 완료 optimizer step에서 �
 `KEEP_RAW_RESULTS`는 기존 Trainer 보존 정책을 유지한다. True는 주기 checkpoint를 보존하며 False는 이번 실행의 오래된 중간 checkpoint를 최소 보존 정책에 따라 정리한다. 입력 원본·공유 전처리·parent·기존 완료 모델은 삭제 대상이 아니다. 실행 전 참조 checkpoint 크기와 저장 주기로 공간을 추정하며, 시도별 계획·진행·오류·미실행 범위는 `attempts/<id>/`에 남긴다. 완료 inventory와 출처 요약은 상세 결과 보존 여부와 무관하게 남긴다.
 
 대용량 원본은 외부 모델 루트에 두고 Git에 넣지 않는다. 이 안내와 JSON 계획·완료 inventory로 모델 수, 실행 상태, 분할 차이, 출처를 분석할 수 있다. 상세 학습 곡선은 원본 기록이 필요하며 계획/테스트만으로 정확도나 학습 완료를 판단하지 않는다. 먼저 Origin cosine Rank-1(TinyFace/SCFace), TPIR@20와 실제 FPIR(SurvFace)을 평가한다. 논문 시험 ROC 비교와 독립 fit/safety 보정 실험을 구분하며, 압축 후에는 해당 점수 공간의 Global-safe 대비 보정을 평가한다. TPIR에는 순위와 genuine score 통과가 모두 필요하고, 목표 FPIR 충족은 반올림 전 값으로 판단한다.
+
+### Parent 정규화 단일 변수 대조 (`02a`, `parent_control`)
+
+`notebooks/02a_parent_regularization_control.ipynb`는 기존 Parent와 데이터를 보존하고 Parent weight_decay만 0.0001→0으로 바꾸는 진단용 실행이다. 전체 일정은 40 epoch이며 기본 STOP_AFTER_EPOCH=2에서 미완료 checkpoint를 저장하고 정지한다. 기존 Parent의 recovery를 새 대조의 시작점으로 사용하지 않는다. `EXECUTE=False`로 계획과 단일 변수 차이를 먼저 확인한다. 자세한 실행·해석·보존 안내는 [PARENT_CONTROL_GUIDE.md](notebooks/PARENT_CONTROL_GUIDE.md)에 있다.
+
+VGGFace2 공식 test의 고정 200명×10장(학습 identity와 중복 0)에서 400장 gallery/1,600장 probe의 로컬 진단 Rank와 표현 집중을 비교한다. 이는 공식 VGGFace2 benchmark가 아니다. 같은 epoch/표본의 paired 인물 bootstrap으로 차이를 요약하며, SurvFace 최종 test로 Parent/epoch를 선택하지 않는다. 활성 성분 수만으로 학습 성공을 판정하지 않는다.
+
+40 epoch Parent 완료 뒤 `make_followup_selection`이 정확한 Parent 경로·해시를 검증하여 `followup/selection.json`을 발행한다. 03과 04의 `CAMPAIGN="parent_control"`은 이 파일만 읽으며 누락 시 실행을 차단한다. 대상은 SurvFace 5,319명 resize_only MagFace seed 8972 한 개이고 fine-tune weight_decay는 0.0001을 유지한다. 기존 Parent의 fine-tune 가중치는 새 Parent 조건으로 재사용하지 않는다.
+
+ronbun에서는 해당 inventory를 `INVENTORY_PURPOSE="diagnostic_control"`, `INVENTORY_ORIGIN_ONLY=True`로 등록한다. 이 경로도 full-FR SurvFace의 보정 인물을 학습에 포함하므로 FR-unseen 보정 실험으로 연결할 수 없다. 기존 03/04의 기본 CAMPAIGN 및 과거 완료 결과는 그대로 보존한다.

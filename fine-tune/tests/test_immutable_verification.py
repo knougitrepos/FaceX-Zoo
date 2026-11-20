@@ -156,7 +156,7 @@ def test_notebooks_expose_force_and_validated_resume():
     root = Path(__file__).resolve().parents[1] / "notebooks"
     for path in root.glob("*.ipynb"):
         notebook = json.loads(path.read_text(encoding="utf-8"))
-        source = "".join(notebook["cells"][2]["source"])
+        source = "".join(next(cell for cell in notebook["cells"] if cell["cell_type"] == "code")["source"])
         assert 'DATA_INTEGRITY_MODE = "immutable_verified_reuse"' in source
         assert "FORCE_DATA_REVERIFY = False" in source
         assert "force_reverify=FORCE_DATA_REVERIFY" in source

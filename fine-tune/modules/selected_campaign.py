@@ -17,14 +17,28 @@ from .checkpoint_manager import (CheckpointManager, compare_configs, compute_con
     compute_sha256, extract_model_and_train_config, load_checkpoint,
     validate_checkpoint_for_export, verify_parent_checkpoint)
 from .shared_storage import artifact_lock
-from .ucface_reference import selection_scope
-from .ucface_controls import ALIGNMENT_CONTROL, PARENT, WEIGHTS, check_file, read_json, export_alignment_control
+from .ucface_reference import FULL_FR_RECIPES, selection_scope
+from .ucface_controls import (
+    ALIGNMENT_CONTROL,
+    COMPLETED_ALIGNED_CHECKPOINTS,
+    COMPLETED_ALIGNED_EXPORTS,
+    PARENT,
+    WEIGHTS,
+    check_file,
+    export_alignment_control,
+    read_json,
+)
 
 SCHEMA = "facex-selection-v2"
 INVENTORY_SCHEMA = "facex-model-inventory-v2"
-RECIPES = {"resize_only": {"scface", "tinyface", "survface"},
-           "two_eye_alignment": {"scface"}, "pfld_five_point_alignment": {"tinyface"},
-           "arcface_continuous_margin": {"survface"}}
+RECIPES = {
+    "resize_only": {"scface", "tinyface", "survface"},
+    "two_eye_alignment": {"scface"},
+    "pfld_five_point_alignment": {"tinyface"},
+    "arcface_continuous_margin": {"survface"},
+    "full_fr_resize_only": {"survface"},
+    "full_fr_pfld_five_point_alignment": {"survface"},
+}
 HEADS = {"arcface", "cosface", "magface", "adaface"}
 
 
@@ -32,6 +46,18 @@ def default_plan():
     return [dict(dataset="scface", recipe="two_eye_alignment", heads=sorted(HEADS), seeds=[8972]),
             dict(dataset="tinyface", recipe="pfld_five_point_alignment", heads=sorted(HEADS), seeds=[8972]),
             dict(dataset="survface", recipe="resize_only", heads=sorted(HEADS), seeds=[8972])]
+
+
+def paper_baseline_plan(survface_recipe="full_fr_resize_only", survface_heads=None, seeds=None):
+    if survface_recipe not in FULL_FR_RECIPES:
+        raise ValueError(f"Unsupported SurvFace paper recipe: {survface_recipe}")
+    seed_list = list(seeds or [8972])
+    surv_heads = list(survface_heads or sorted(HEADS))
+    return [
+        dict(dataset="scface", recipe="two_eye_alignment", heads=sorted(HEADS), seeds=seed_list),
+        dict(dataset="tinyface", recipe="pfld_five_point_alignment", heads=sorted(HEADS), seeds=seed_list),
+        dict(dataset="survface", recipe=survface_recipe, heads=surv_heads, seeds=seed_list),
+    ]
 
 
 def expand_plan(plan):
@@ -131,14 +157,57 @@ def _recipe_source(selection, row):
 def default_references(selection):
     """Known completed sources only; no directory scan or score-based choice."""
     refs = {}
+    if selection["settings"].get("campaign", {}).get("parent_binding"):
+        return refs  # A different Parent cannot reuse old fine-tuned weights.
+    purpose = selection.get("purpose", "local_protocol_baseline")
+    base = selection["settings"]
+    model_root = Path(base.get("storage", {}).get("model_root", Path(selection["diagnostic_root"]).parents[2]))
     for row in selection["rows"]:
         if row["seed"] != 8972:
             continue
         if row["recipe"] == "resize_only":
-            refs[row["run_id"]] = _baseline_reference(selection["settings"], row["dataset"], row["head"])
+            refs[row["run_id"]] = _baseline_reference(base, row["dataset"], row["head"])
+        elif purpose == "paper_baseline" and row["run_id"] in COMPLETED_ALIGNED_CHECKPOINTS:
+            rel_path, sha = COMPLETED_ALIGNED_CHECKPOINTS[row["run_id"]]
+            candidate = model_root / rel_path
+            if candidate.is_file():
+                refs[row["run_id"]] = dict(path=str(candidate), sha256=sha)
+            elif row["head"] == "arcface":
+                refs[row["run_id"]] = _recipe_source(selection, row)
         elif row["head"] == "arcface" and row["recipe"] in ("two_eye_alignment", "pfld_five_point_alignment"):
             refs[row["run_id"]] = _recipe_source(selection, row)
     return refs
+
+
+def parent_digest(cfg):
+    binding = cfg.get("campaign", {}).get("parent_binding")
+    if not binding:
+        return PARENT
+    if cfg["campaign"].get("purpose") != "diagnostic_control":
+        raise ValueError("A replacement Parent requires diagnostic_control provenance")
+    if (cfg["campaign"].get("parent_sha256") != binding.get("sha256")
+            or Path(cfg["campaign"]["parent_checkpoint"]).resolve() != Path(binding["path"]).resolve()):
+        raise ValueError("Parent binding path/hash differs")
+    return binding["sha256"]
+
+
+def _bind_selected_parent(cfg, base, selection, row):
+    binding = base.get("campaign", {}).get("parent_binding")
+    if binding:
+        from .parent_controls import verify_control_parent
+        if selection["purpose"] != "diagnostic_control":
+            raise ValueError("Replacement Parent requires diagnostic_control")
+        verify_control_parent(binding)
+        if cfg["training"]["weight_decay"] != 0.0001:
+            raise ValueError("Parent-only control must retain fine-tune weight_decay=0.0001")
+        parent, digest = binding["path"], binding["sha256"]
+        cfg["campaign"].update(purpose="diagnostic_control", parent_binding=copy.deepcopy(binding))
+    else:
+        parent = base["campaign"].get("parent_checkpoint") or w.checkpoint_path(base, "pretrain", "arcface", base["campaign"]["parent_seed"])
+        digest = PARENT
+    check_file(parent, digest)
+    cfg["campaign"].update(heads=[row["head"]], finetune_datasets=[row["dataset"]],
+                           parent_checkpoint=str(parent), parent_sha256=digest)
 
 
 def settings_for(selection, row, *, reverify=False, allow_verification_retry=False):
@@ -152,6 +221,117 @@ def settings_for(selection, row, *, reverify=False, allow_verification_retry=Fal
                                    expected_stage="finetune", expected_parent_hash=PARENT)
     if compute_config_hash(stored) != payload["config_hash"]:
         raise ValueError("Recipe source config hash mismatch")
+    if row["recipe"] in FULL_FR_RECIPES:
+        from .survface_paper import paper_handoff_path, paper_survface_profile, pfld_survface_policy
+        ds_root = base.get("storage", {}).get("dataset_root")
+        profile = paper_survface_profile(cfg["finetune_profiles"]["survface"], ds_root, row["recipe"])
+        cfg["finetune_profiles"]["survface"] = profile
+        cfg["campaign"]["handoff_path"] = str(paper_handoff_path(ds_root))
+        protocol = w.verify_protocol(profile)
+        report_path = Path(profile["alignment_report"])
+        if not report_path.is_file():
+            raise FileNotFoundError(f"Prepare SurvFace paper preprocessing first: {report_path}")
+        report = read_json(report_path)
+        report_sha = compute_sha256(str(report_path))
+        prep = stored["preprocessing"]
+        for key in ("input_size", "pixel_mean", "pixel_std"):
+            if base["dataset"][key] != prep[key]:
+                raise ValueError(f"Selected normalization differs from the recipe: {key}")
+        if row["recipe"] == "full_fr_resize_only":
+            from .alignment import alignment_policy
+            policy = alignment_policy(Path(__file__).resolve().parents[2], cfg["alignment"], "survface")
+            if (report.get("completed") is not True or report.get("failed") != 0
+                    or report.get("prepared") != profile["expected_images"]
+                    or report.get("policy") != policy
+                    or not (report_path.parent / "COMPLETED").is_file()):
+                raise ValueError("Incomplete SurvFace paper resize preprocessing")
+            check_file(report["manifest"], report["manifest_sha256"])
+            check_file(report["train_list"], report["train_list_sha256"])
+            check_file(profile["train_list"], report["source_list_sha256"])
+            cfg["dataset"] = {**cfg["dataset"], **profile, **stored["dataset"]}
+            cfg["dataset"].update(
+                name="survface",
+                num_classes=profile["num_classes"],
+                expected_images=profile["expected_images"],
+                raw_root=profile["raw_root"],
+                data_root=str(Path(report["train_list"]).parent),
+                source_train_list=profile["train_list"],
+                train_list=report["train_list"],
+                train_list_hash=report["train_list_sha256"],
+                val_list=None,
+                alignment="resize_only",
+                alignment_policy=policy,
+                alignment_report=str(report_path),
+                alignment_report_sha256=report_sha,
+                alignment_manifest_sha256=report["manifest_sha256"],
+                role_manifest_sha256=protocol["roles_sha256"],
+                training_identity_sha256=protocol["training_identity_sha256"],
+                shared_protocol_sha256=profile["shared_protocol_sha256"],
+                input_size=prep["input_size"],
+                pixel_mean=prep["pixel_mean"],
+                pixel_std=prep["pixel_std"],
+            )
+            cfg["data_integrity_verification"] = dict(
+                mode="immutable_verified_reuse",
+                receipt_path=str(report_path),
+                receipt_sha256=report_sha,
+                verified_images=report["prepared"],
+                assumption="Verified full 5,319-ID SurvFace resize preprocessing",
+            )
+        else:
+            policy = pfld_survface_policy(Path(__file__).resolve().parents[2])
+            manifest = report_path.parent / "images.csv"
+            train_txt = report_path.parent / "train_list.txt"
+            if (report.get("status") != "completed" or report.get("alignment_policy") != policy
+                    or report.get("image_count") != profile["expected_images"]
+                    or report.get("original_role_manifest_sha256") != protocol["roles_sha256"]
+                    or not (report_path.parent / "COMPLETED").is_file()):
+                raise ValueError("Incomplete SurvFace paper PFLD preprocessing")
+            check_file(manifest, report["manifest_sha256"])
+            check_file(train_txt, report["train_list_sha256"])
+            check_file(profile["train_list"], report["source_list_sha256"])
+            cfg["dataset"] = {**cfg["dataset"], **profile, **stored["dataset"]}
+            cfg["dataset"].update(
+                name="survface",
+                num_classes=profile["num_classes"],
+                expected_images=profile["expected_images"],
+                raw_root=profile["raw_root"],
+                data_root=str(report_path.parent),
+                processed_root=str(report_path.parent),
+                source_train_list=profile["train_list"],
+                train_list=str(train_txt),
+                train_list_hash=report["train_list_sha256"],
+                val_list=None,
+                alignment=policy["version"],
+                alignment_policy=policy,
+                alignment_report=str(report_path),
+                alignment_report_sha256=report_sha,
+                alignment_manifest_sha256=report["manifest_sha256"],
+                role_manifest_sha256=protocol["roles_sha256"],
+                training_identity_sha256=protocol["training_identity_sha256"],
+                shared_protocol_sha256=profile["shared_protocol_sha256"],
+                input_size=prep["input_size"],
+                pixel_mean=prep["pixel_mean"],
+                pixel_std=prep["pixel_std"],
+            )
+            cfg["alignment"]["low_resolution"] = policy
+            cfg["data_integrity_verification"] = dict(
+                mode="controlled_alignment_all_verified",
+                receipt_path=str(report_path),
+                receipt_sha256=report_sha,
+                verified_images=report["image_count"],
+                assumption="Verified full 5,319-ID SurvFace PFLD preprocessing",
+            )
+        cfg["project"].update(seed=row["seed"], seed_list=[row["seed"]])
+        parent = base["campaign"].get("parent_checkpoint") or w.checkpoint_path(base, "pretrain", "arcface", base["campaign"]["parent_seed"])
+        _bind_selected_parent(cfg, base, selection, row)
+        cfg["paths"] = {k: str(Path(selection["root"]) / k.removesuffix("_dir") / row["run_id"]) for k in cfg["paths"]}
+        cfg["selection_provenance"] = dict(row=row, recipe_source=source, driver_sha256=compute_sha256(__file__))
+        w.validate_paper_parameters(cfg)
+        if cfg["training"]["drop_last"] is not False or cfg["dataset"]["val_list"]:
+            raise ValueError("Selected training requires full FR split")
+        return cfg
+
     profile = cfg["finetune_profiles"][row["dataset"]]
     protocol = w.verify_protocol(profile)
     for key, expected in (("name", row["dataset"]), ("role_manifest_sha256", protocol["roles_sha256"]),
@@ -227,8 +407,7 @@ def settings_for(selection, row, *, reverify=False, allow_verification_retry=Fal
                 assumption="Completed source checkpoint verified this exact immutable prepared dataset")
     cfg["project"].update(seed=row["seed"], seed_list=[row["seed"]])
     parent = base["campaign"].get("parent_checkpoint") or w.checkpoint_path(base, "pretrain", "arcface", base["campaign"]["parent_seed"])
-    check_file(parent, PARENT)
-    cfg["campaign"].update(heads=[row["head"]], finetune_datasets=[row["dataset"]], parent_checkpoint=str(parent), parent_sha256=PARENT)
+    _bind_selected_parent(cfg, base, selection, row)
     if row["recipe"] == "arcface_continuous_margin":
         cfg["heads"]["arcface"]["margin_am"] = 1 - math.cos(cfg["heads"]["arcface"]["margin_arc"])
     cfg["paths"] = {k: str(Path(selection["root"]) / k.removesuffix("_dir") / row["run_id"]) for k in cfg["paths"]}
@@ -242,7 +421,7 @@ def settings_for(selection, row, *, reverify=False, allow_verification_retry=Fal
 def _expected(cfg, row):
     with torch.random.fork_rng(devices=[]):
         model = w.build_model(cfg["backbone"], dict(cfg["heads"][row["head"]], num_class=cfg["dataset"]["num_classes"]))
-    return extract_model_and_train_config(model, cfg, seed=row["seed"], stage="finetune", head_type=row["head"], parent_hash=PARENT)
+    return extract_model_and_train_config(model, cfg, seed=row["seed"], stage="finetune", head_type=row["head"], parent_hash=parent_digest(cfg))
 
 
 def _validate(path, cfg, row, *, completed=True, digest=None):
@@ -253,7 +432,7 @@ def _validate(path, cfg, row, *, completed=True, digest=None):
         raise ValueError("Checkpoint config hash mismatch")
     if completed:
         validate_checkpoint_for_export(payload, target_epoch=cfg["training"]["epoches"], expected_seed=row["seed"],
-            expected_head=row["head"], expected_stage="finetune", expected_parent_hash=PARENT)
+            expected_head=row["head"], expected_stage="finetune", expected_parent_hash=parent_digest(cfg))
     differences = compare_configs(payload["config"], _expected(cfg, row), full_strict=True)
     if differences:
         raise ValueError("Selected checkpoint differs: " + "; ".join(differences))
@@ -312,7 +491,7 @@ def _train(cfg, row, resume=None):
     torch.set_num_threads(cfg["training"].get("torch_threads", 2))
     cv2.setNumThreads(1)
     set_seed(row["seed"])
-    parent, digest = verify_parent_checkpoint(cfg["campaign"]["parent_checkpoint"], expected_hash=PARENT,
+    parent, digest = verify_parent_checkpoint(cfg["campaign"]["parent_checkpoint"], expected_hash=parent_digest(cfg),
         require_hash=True, require_completed=True, expected_seed=cfg["campaign"]["parent_seed"], target_epoch=40)
     w.validate_parent_preprocessing(parent["config"], cfg["dataset"], cfg["alignment"])
     fingerprints = parent["config"]["code_fingerprints"]
@@ -373,14 +552,19 @@ def export_selected(selection, row, cfg, path):
     if known and source_hash == known["sha256"]:
         # Keep existing model UIDs and compatible embedding caches reusable.
         base = selection["settings"]
+        model_root = Path(base.get("storage", {}).get("model_root", Path(selection["diagnostic_root"]).parents[2]))
         if row["recipe"] == "resize_only":
             export_dir = Path(base["paths"]["export_dir"]) / f"export_{row['dataset']}_{row['head']}_seed{row['seed']}"
             output = export_dir / f"exported_{w.backbone_slug(cfg['backbone'])}_1024d_{row['head']}_seed{row['seed']}.pt"
+        elif row["run_id"] in COMPLETED_ALIGNED_EXPORTS:
+            rel_exp, _ = COMPLETED_ALIGNED_EXPORTS[row["run_id"]]
+            output = model_root / rel_exp
         else:
             result = export_alignment_control(base, row["dataset"], selection["diagnostic_root"],
                 Path(base["paths"]["export_dir"]).parent / ALIGNMENT_CONTROL)
             output = Path(result["export"])
-        return _inventory_row(row, output, _verify_export(output, payload, source_hash), path, source_hash)
+        if output.is_file():
+            return _inventory_row(row, output, _verify_export(output, payload, source_hash), path, source_hash)
     destination = Path(selection["root"]) / "exports" / row["run_id"]
     filename = row["run_id"] + ".pt"
     with artifact_lock(destination):
@@ -395,8 +579,17 @@ def export_selected(selection, row, cfg, path):
             with TemporaryDirectory(dir=destination.parent) as temp:
                 staging = Path(temp) / row["run_id"]
                 staging.mkdir()
+                if row["recipe"] == "full_fr_pfld_five_point_alignment":
+                    from .survface_paper import write_survface_geometry
+                    profile = cfg["finetune_profiles"]["survface"]
+                    policy = payload["config"]["preprocessing"]["alignment_policy"]
+                    prep_dir = Path(profile["alignment_report"]).parent
+                    geom_file = staging / "affine.csv"
+                    count = write_survface_geometry(geom_file, profile, policy, prep_dir)
+                    geometry = (geom_file, dict(file="affine.csv", sha256=compute_sha256(str(geom_file)),
+                                                rows=count, schema="raw_to_arc112_affine_v1"))
                 metadata = {**row, "stage": "export", "completed": True, "is_smoke": False, "feat_dim": 1024,
-                    "epochs": payload["epoch"], "parent_hash": PARENT, "common_parent_seed": cfg["campaign"]["parent_seed"],
+                    "epochs": payload["epoch"], "parent_hash": parent_digest(cfg), "common_parent_seed": cfg["campaign"]["parent_seed"],
                     "source_checkpoint": str(path), "source_sha256": source_hash, "source_config": payload["config"],
                     "source_config_hash": payload["config_hash"], "preprocessing": payload["config"]["preprocessing"],
                     "execution_settings": payload.get("extra_meta", {}).get("execution_settings"),
@@ -404,7 +597,8 @@ def export_selected(selection, row, cfg, path):
                     "selection_provenance": cfg["selection_provenance"],
                     "reproduction_scope": "Selected local recipe; no claim of exact UCFace reproduction"}
                 if geometry:
-                    shutil.copyfile(geometry[0], staging / "affine.csv")
+                    if geometry[0] != staging / "affine.csv":
+                        shutil.copyfile(geometry[0], staging / "affine.csv")
                     metadata["input_geometry"] = geometry[1]
                 CheckpointManager(str(staging)).export_backbone_only(payload, filename, metadata)
                 staging.rename(destination)

@@ -48,6 +48,10 @@ class TrainingStopped(RuntimeError):
     """A requested stop after an optimizer step, with resumable state saved."""
 
 
+class EpochLimitReached(TrainingStopped):
+    """A planned epoch-boundary pause; the original training schedule is intact."""
+
+
 class NonFiniteTrainingError(RuntimeError):
     """A non-finite loss or gradient blocked an optimizer update."""
 
@@ -539,6 +543,10 @@ class Trainer:
         """Execute full training loop across epochs."""
         import copy
         self._model_prefix = model_prefix
+        stop_epoch = self.config.get("runtime", {}).get("stop_after_epoch")
+        if stop_epoch is not None:
+            if type(stop_epoch) is not int or not start_epoch <= stop_epoch <= self.total_epochs:
+                raise ValueError("stop_after_epoch must be an integer from start_epoch to total_epochs")
         # Preserve restored history if available; otherwise initialize
         if self.history and self.history.get("epochs") and len(self.history["epochs"]) > 0:
             history = self.history
@@ -578,7 +586,7 @@ class Trainer:
                 self.scheduler.step()
 
                 # Periodic saving
-                if epoch % self.save_freq == 0 or epoch == self.total_epochs:
+                if epoch % self.save_freq == 0 or epoch == self.total_epochs or epoch == stop_epoch:
                     filename = f"{model_prefix}_epoch_{epoch}.pt"
                     saved_path = self.checkpoint_manager.save_checkpoint(
                         filename=filename,
@@ -622,9 +630,17 @@ class Trainer:
                     elif epoch == self.total_epochs:
                         logger.info(f"[Formal Complete] Saved final epoch {epoch} checkpoint to {saved_path}")
 
+                if epoch == stop_epoch and epoch < self.total_epochs:
+                    self._progress("paused_epoch_limit", completed=False, next_epoch=epoch + 1,
+                                   stop_after_epoch=stop_epoch)
+                    raise EpochLimitReached(f"Epoch {epoch} saved; resume explicitly from {self.last_saved_ckpt}")
+
             self._progress("completed", completed=True)
             logger.info("Training loop completed successfully.")
             return history
+        except EpochLimitReached:
+            logger.info("Planned epoch limit reached; full schedule remains %d epochs.", self.total_epochs)
+            raise
         except Exception as e:
             logger.error(f"Training loop failed: {e}", exc_info=True)
             raise

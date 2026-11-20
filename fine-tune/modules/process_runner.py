@@ -66,7 +66,7 @@ def launch_campaign(base_dir, cfg, stage, resume_checkpoints=None, smoke=False,
     ticket = Path(cfg["paths"].get("launch_dir", root / "fine-tune/data/launches")) / uuid.uuid4().hex
     ticket.mkdir(parents=True)
     effective = copy.deepcopy(cfg)
-    effective["runtime"] = {"stop_file": str(ticket / "stop.request"),
+    effective["runtime"] = {**effective.get("runtime", {}), "stop_file": str(ticket / "stop.request"),
                             "log_file": str(ticket / "console.log"),
                             "result_file": str(ticket / "result.json")}
     request = {"settings": effective, "stage": stage, "resume": resume_checkpoints or {}, "smoke": smoke,

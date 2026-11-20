@@ -19,6 +19,69 @@ ALIGNMENT_CONTROL = "ucface_alignment_arcface_s8972_20261112_v1"
 WEIGHTS = {"scface": "a921a13810efe5c646f153ead5ce76972c099c1fe2fc0d62ffd868b28ba1d65e",
            "tinyface": "3af40ef5d90699e47fa208202aa69ca99ce7bbe0900f21cb616747b0e805d7ea"}
 
+# Verified 40-epoch aligned checkpoints (SCFace two_eye_alignment & TinyFace pfld_five_point_alignment).
+COMPLETED_ALIGNED_CHECKPOINTS = {
+    "scface_adaface_two_eye_alignment_s8972": (
+        "facex/selected/ucface_recipes_v1/checkpoint/scface_adaface_two_eye_alignment_s8972/finetune_scface_adaface_seed8972/finetune_mobilefacenet_1024d_adaface_epoch_40.pt",
+        "5998e85019adfdebde8c14a0f00652e394174308bbc3b8520a258c1627c4a956",
+    ),
+    "scface_arcface_two_eye_alignment_s8972": (
+        "facex/diagnostics/ucface_alignment_arcface_s8972_20261112_v1/checkpoints/finetune_scface_arcface_seed8972/finetune_mobilefacenet_1024d_arcface_epoch_40.pt",
+        "a921a13810efe5c646f153ead5ce76972c099c1fe2fc0d62ffd868b28ba1d65e",
+    ),
+    "scface_cosface_two_eye_alignment_s8972": (
+        "facex/selected/ucface_recipes_v1/checkpoint/scface_cosface_two_eye_alignment_s8972/finetune_scface_cosface_seed8972/finetune_mobilefacenet_1024d_cosface_epoch_40.pt",
+        "294f8817ba526e7e20d5d21b01b2d99fbbd6bfb08ab7988918f8b42bd7538461",
+    ),
+    "scface_magface_two_eye_alignment_s8972": (
+        "facex/selected/ucface_recipes_v1/checkpoint/scface_magface_two_eye_alignment_s8972/finetune_scface_magface_seed8972/finetune_mobilefacenet_1024d_magface_epoch_40.pt",
+        "b32e4309ca1540c65af1e4c8a703334e1a8981e577e4d37f0184f80633728acb",
+    ),
+    "tinyface_adaface_pfld_five_point_alignment_s8972": (
+        "facex/selected/ucface_recipes_v1/checkpoint/tinyface_adaface_pfld_five_point_alignment_s8972/finetune_tinyface_adaface_seed8972/finetune_mobilefacenet_1024d_adaface_epoch_40.pt",
+        "11d0956fc37b4d9f62dc19c4d91dc448dfc443cabf215cf29b231df6c10854a3",
+    ),
+    "tinyface_arcface_pfld_five_point_alignment_s8972": (
+        "facex/diagnostics/ucface_alignment_arcface_s8972_20261112_v1/checkpoints/finetune_tinyface_arcface_seed8972/finetune_mobilefacenet_1024d_arcface_epoch_40.pt",
+        "3af40ef5d90699e47fa208202aa69ca99ce7bbe0900f21cb616747b0e805d7ea",
+    ),
+    "tinyface_cosface_pfld_five_point_alignment_s8972": (
+        "facex/selected/ucface_recipes_v1/checkpoint/tinyface_cosface_pfld_five_point_alignment_s8972/finetune_tinyface_cosface_seed8972/finetune_mobilefacenet_1024d_cosface_epoch_40.pt",
+        "6a5935ae36d4c7b4c259de92e512e34731bae0c400aa1defb1eed06900f99ffc",
+    ),
+    "tinyface_magface_pfld_five_point_alignment_s8972": (
+        "facex/selected/ucface_recipes_v1/checkpoint/tinyface_magface_pfld_five_point_alignment_s8972/finetune_tinyface_magface_seed8972/finetune_mobilefacenet_1024d_magface_epoch_40.pt",
+        "4d762247826a6074d72fa06dbac529ab0b0b2ac9cc10d4b75dcc83c7867ef98f",
+    ),
+}
+
+COMPLETED_ALIGNED_EXPORTS = {
+    "scface_adaface_two_eye_alignment_s8972": (
+        "facex/selected/ucface_recipes_v1/exports/scface_adaface_two_eye_alignment_s8972/scface_adaface_two_eye_alignment_s8972.pt",
+        "8e44ba03d0434ff51187e9b5dbf9521d5dbf7c45350f43775c5a10483de1a339",
+    ),
+    "scface_cosface_two_eye_alignment_s8972": (
+        "facex/selected/ucface_recipes_v1/exports/scface_cosface_two_eye_alignment_s8972/scface_cosface_two_eye_alignment_s8972.pt",
+        "955fabe4c96668ea5f11efd5818357a831f03e82a72b0981d68d2c1bcef85204",
+    ),
+    "scface_magface_two_eye_alignment_s8972": (
+        "facex/selected/ucface_recipes_v1/exports/scface_magface_two_eye_alignment_s8972/scface_magface_two_eye_alignment_s8972.pt",
+        "234b8a9e78bc76238c563981a4d023a88614720c27eb10bcc787897ec80995dd",
+    ),
+    "tinyface_adaface_pfld_five_point_alignment_s8972": (
+        "facex/selected/ucface_recipes_v1/exports/tinyface_adaface_pfld_five_point_alignment_s8972/tinyface_adaface_pfld_five_point_alignment_s8972.pt",
+        "fddf2ac59ca774b5e01dce61b709a2df562b45d59aa9be04f14eb557cb2b1532",
+    ),
+    "tinyface_cosface_pfld_five_point_alignment_s8972": (
+        "facex/selected/ucface_recipes_v1/exports/tinyface_cosface_pfld_five_point_alignment_s8972/tinyface_cosface_pfld_five_point_alignment_s8972.pt",
+        "f7b787fd6adb01184e33602995191a69849bfb881279b98d636f8ae74e5400f5",
+    ),
+    "tinyface_magface_pfld_five_point_alignment_s8972": (
+        "facex/selected/ucface_recipes_v1/exports/tinyface_magface_pfld_five_point_alignment_s8972/tinyface_magface_pfld_five_point_alignment_s8972.pt",
+        "34e55b431f6a73e632286c9cee155eae8ebf92eea5bf2cc0c2a9dfa29131fba9",
+    ),
+}
+
 
 def read_json(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
