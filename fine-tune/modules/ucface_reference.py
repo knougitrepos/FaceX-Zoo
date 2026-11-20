@@ -18,8 +18,11 @@ def selection_scope(settings, rows, purpose):
         raise ValueError("continuous_margin is a diagnostic_control, never a baseline recipe")
     full_fr = any(r["recipe"] in FULL_FR_RECIPES for r in rows)
     parent_binding = settings.get("campaign", {}).get("parent_binding")
+    ft_control = settings.get("campaign", {}).get("finetune_control")
     if parent_binding and purpose != "diagnostic_control":
         raise ValueError("Replacement Parent must be a diagnostic_control")
+    if ft_control and not parent_binding:
+        raise ValueError("finetune_control requires an explicit parent_binding under diagnostic_control")
     if full_fr and purpose != "paper_baseline" and not (purpose == "diagnostic_control" and parent_binding):
         raise ValueError("Full 5,319-ID SurvFace recipes require purpose='paper_baseline'")
     if purpose == "paper_baseline" and any(r["dataset"] == "survface" and r["recipe"] not in FULL_FR_RECIPES for r in rows):
@@ -62,7 +65,18 @@ def selection_scope(settings, rows, purpose):
     if parent_binding:
         import copy
         result["parent_binding"] = copy.deepcopy(parent_binding)
-        result["controlled_factor"] = "Parent training.weight_decay; downstream recipe unchanged"
+        if ft_control:
+            from .parent_controls import validate_finetune_control_spec
+            validate_finetune_control_spec(
+                ft_control,
+                parent_binding,
+                settings.get("training", {}).get("weight_decay"),
+                rows=rows,
+            )
+            result["finetune_control"] = copy.deepcopy(ft_control)
+            result["controlled_factor"] = "Parent training.weight_decay=0.0 reused; fine-tune training.weight_decay 0.0001 -> 0.0"
+        else:
+            result["controlled_factor"] = "Parent training.weight_decay; downstream recipe unchanged"
     return result
 
 

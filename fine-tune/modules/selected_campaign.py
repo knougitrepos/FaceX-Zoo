@@ -194,11 +194,26 @@ def parent_digest(cfg):
 def _bind_selected_parent(cfg, base, selection, row):
     binding = base.get("campaign", {}).get("parent_binding")
     if binding:
-        from .parent_controls import verify_control_parent
+        from .parent_controls import validate_finetune_control_spec, verify_control_parent
         if selection["purpose"] != "diagnostic_control":
             raise ValueError("Replacement Parent requires diagnostic_control")
         verify_control_parent(binding)
-        if cfg["training"]["weight_decay"] != 0.0001:
+        ft_control = base.get("campaign", {}).get("finetune_control")
+        if ft_control:
+            validate_finetune_control_spec(
+                ft_control,
+                binding,
+                cfg["training"].get("weight_decay"),
+                rows=selection.get("rows"),
+            )
+            validate_finetune_control_spec(
+                ft_control,
+                binding,
+                cfg["training"].get("weight_decay"),
+                rows=[row],
+            )
+            cfg["campaign"]["finetune_control"] = copy.deepcopy(ft_control)
+        elif cfg["training"]["weight_decay"] != 0.0001:
             raise ValueError("Parent-only control must retain fine-tune weight_decay=0.0001")
         parent, digest = binding["path"], binding["sha256"]
         cfg["campaign"].update(purpose="diagnostic_control", parent_binding=copy.deepcopy(binding))
@@ -330,6 +345,9 @@ def settings_for(selection, row, *, reverify=False, allow_verification_retry=Fal
         w.validate_paper_parameters(cfg)
         if cfg["training"]["drop_last"] is not False or cfg["dataset"]["val_list"]:
             raise ValueError("Selected training requires full FR split")
+        if cfg["campaign"].get("finetune_control"):
+            from .parent_controls import verify_finetune_wd_zero_settings
+            verify_finetune_wd_zero_settings(selection, row, cfg)
         return cfg
 
     profile = cfg["finetune_profiles"][row["dataset"]]
@@ -430,12 +448,34 @@ def _validate(path, cfg, row, *, completed=True, digest=None):
     payload = load_checkpoint(str(path))
     if compute_config_hash(payload["config"]) != payload["config_hash"]:
         raise ValueError("Checkpoint config hash mismatch")
+    expected = _expected(cfg, row)
     if completed:
         validate_checkpoint_for_export(payload, target_epoch=cfg["training"]["epoches"], expected_seed=row["seed"],
             expected_head=row["head"], expected_stage="finetune", expected_parent_hash=parent_digest(cfg))
-    differences = compare_configs(payload["config"], _expected(cfg, row), full_strict=True)
+    else:
+        if payload.get("parent_hash") != parent_digest(cfg) or payload["config"].get("parent_hash") != parent_digest(cfg):
+            raise ValueError("Resume checkpoint parent_hash mismatch")
+        if payload.get("seed") != row["seed"] or payload["config"].get("seed") != row["seed"]:
+            raise ValueError("Resume checkpoint seed mismatch")
+    differences = compare_configs(payload["config"], expected, full_strict=True)
     if differences:
         raise ValueError("Selected checkpoint differs: " + "; ".join(differences))
+    ckpt_wd = payload["config"].get("training", {}).get("weight_decay")
+    exp_wd = expected["training"]["weight_decay"]
+    if ckpt_wd is None or float(ckpt_wd) != float(exp_wd):
+        raise ValueError(f"Selected checkpoint differs: Optimizer weight_decay mismatch: checkpoint={ckpt_wd}, current={exp_wd}")
+    opt_groups = payload.get("optimizer_state_dict", {}).get("param_groups", [])
+    if not isinstance(opt_groups, list) or not opt_groups or any(
+            g.get("weight_decay") is None or float(g.get("weight_decay")) != float(exp_wd) for g in opt_groups):
+        raise ValueError(f"Selected checkpoint differs: Optimizer param_groups weight_decay mismatch (expected {exp_wd})")
+    ft_control = cfg.get("campaign", {}).get("finetune_control")
+    ckpt_exec = payload.get("extra_meta", {}).get("execution_settings")
+    ckpt_ft_control = ckpt_exec.get("campaign", {}).get("finetune_control") if isinstance(ckpt_exec, dict) else None
+    if ft_control is not None:
+        from .parent_controls import verify_finetune_wd_zero_checkpoint_payload
+        verify_finetune_wd_zero_checkpoint_payload(payload, path, cfg, expected, completed=completed)
+    elif ckpt_ft_control is not None:
+        raise ValueError("Selected checkpoint belongs to a finetune_control diagnostic run")
     return payload
 
 
@@ -505,6 +545,8 @@ def _train(cfg, row, resume=None):
         train_loader, val_loader = w.make_loaders(cfg)
         trainer = Trainer(model, train_loader, val_loader, cfg, CheckpointManager(str(target.parent)), device,
                           parent_hash=digest, head_type=row["head"], stage="finetune")
+        if resume:
+            _validate(resume, cfg, row, completed=False)
         start = trainer.resume_from_checkpoint(str(resume)) if resume else 1
         snapshot = target.parent / (f"resume_settings_{uuid.uuid4().hex}.json" if resume else "notebook_settings.json")
         w.write_json(snapshot, cfg, immutable=True)
@@ -671,5 +713,8 @@ def execute_selection(selection, stage, resume=None, runtime=None, force_reverif
             inventory = dict(schema=INVENTORY_SCHEMA, status="completed", selection=selection, models=results)
             inventory_path = root / "inventories" / (compute_config_hash(inventory) + ".json")
             w.write_json(inventory_path, inventory, immutable=True)
+            ft_ctrl = selection.get("settings", {}).get("campaign", {}).get("finetune_control") or {}
+            if ft_ctrl.get("schema") == "facex-finetune-weight-decay-control-v1":
+                w.write_json(root / "inventory.json", inventory, immutable=True)
             print(f"MODEL_INVENTORY = {str(inventory_path)!r}", flush=True)
         return results
