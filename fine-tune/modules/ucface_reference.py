@@ -66,15 +66,44 @@ def selection_scope(settings, rows, purpose):
         import copy
         result["parent_binding"] = copy.deepcopy(parent_binding)
         if ft_control:
-            from .parent_controls import validate_finetune_control_spec
+            from .parent_controls import (
+                FINETUNE_DETACH_MARGIN_LR_0002_SCHEMA,
+                FINETUNE_DETACH_MARGIN_SCHEMA,
+                FINETUNE_OUTPUT_BN_SCHEMA,
+                FINETUNE_WD_ZERO_FREEZE_BIAS_SCHEMA,
+                validate_finetune_control_spec,
+            )
             validate_finetune_control_spec(
                 ft_control,
                 parent_binding,
                 settings.get("training", {}).get("weight_decay"),
                 rows=rows,
+                training_cfg=settings.get("training"),
+                head_cfg=settings.get("heads", {}).get("magface"),
             )
             result["finetune_control"] = copy.deepcopy(ft_control)
-            result["controlled_factor"] = "Parent training.weight_decay=0.0 reused; fine-tune training.weight_decay 0.0001 -> 0.0"
+            if ft_control.get("schema") == FINETUNE_OUTPUT_BN_SCHEMA:
+                result["controlled_factor"] = (
+                    "Parent training.weight_decay=0.0 reused; fine-tune training.weight_decay=0.0001 "
+                    "retained with output bn.bias frozen at 0 and output bn.weight weight_decay=0.0"
+                )
+            elif ft_control.get("schema") == FINETUNE_WD_ZERO_FREEZE_BIAS_SCHEMA:
+                result["controlled_factor"] = (
+                    "Parent training.weight_decay=0.0 reused; fine-tune training.weight_decay 0.0001 -> 0.0 "
+                    "with output bn.bias frozen at 0"
+                )
+            elif ft_control.get("schema") == FINETUNE_DETACH_MARGIN_SCHEMA:
+                result["controlled_factor"] = (
+                    "Parent training.weight_decay=0.0 reused; fine-tune training.weight_decay 0.0001 -> 0.0, "
+                    "output bn.bias frozen at 0, and heads.magface.detach_margin_norm=True"
+                )
+            elif ft_control.get("schema") == FINETUNE_DETACH_MARGIN_LR_0002_SCHEMA:
+                result["controlled_factor"] = (
+                    "Parent training.weight_decay=0.0 reused; fine-tune training.lr 0.001 -> 0.0002, "
+                    "training.weight_decay 0.0001 -> 0.0, output bn.bias frozen at 0, and heads.magface.detach_margin_norm=True"
+                )
+            else:
+                result["controlled_factor"] = "Parent training.weight_decay=0.0 reused; fine-tune training.weight_decay 0.0001 -> 0.0"
         else:
             result["controlled_factor"] = "Parent training.weight_decay; downstream recipe unchanged"
     return result

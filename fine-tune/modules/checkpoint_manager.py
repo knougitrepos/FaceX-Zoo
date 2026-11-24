@@ -350,6 +350,8 @@ def extract_model_config(model: nn.Module) -> Dict[str, Any]:
             head_dict["u_margin"] = round(float(head.u_margin), 4)
         if hasattr(head, "lamda"):
             head_dict["lamda"] = round(float(head.lamda), 4)
+        if getattr(head, "detach_margin_norm", False) is True:
+            head_dict["detach_margin_norm"] = True
 
         config["head"] = head_dict
 
@@ -543,6 +545,14 @@ def extract_train_config(
     elif "total_epochs" in train_cfg:
         total_epochs = int(train_cfg["total_epochs"])
 
+    output_bn_freeze_bias = bool(train_cfg.get("output_bn_freeze_bias", False))
+    output_bn_weight_decay = train_cfg.get("output_bn_weight_decay", None)
+    if output_bn_weight_decay is not None:
+        output_bn_weight_decay = float(output_bn_weight_decay)
+    if optimizer is not None and hasattr(optimizer, "param_groups"):
+        if len(optimizer.param_groups) == 2 and optimizer.param_groups[1].get("name") == "output_bn_weight":
+            output_bn_weight_decay = float(optimizer.param_groups[1]["weight_decay"])
+
     if train_cfg or train_loader is not None or scheduler is not None or optimizer is not None:
         training_dict: Dict[str, Any] = {
             "optimizer": opt_name if opt_name is not None else "adam",
@@ -554,6 +564,10 @@ def extract_train_config(
             "lr_decay_ratio": eff_lr_decay_ratio if eff_lr_decay_ratio is not None else 0.1,
             "drop_last": getattr(getattr(train_loader, "batch_sampler", None), "drop_last", train_cfg.get("drop_last", False)),
         }
+        if output_bn_freeze_bias:
+            training_dict["output_bn_freeze_bias"] = True
+        if output_bn_weight_decay is not None:
+            training_dict["output_bn_weight_decay"] = float(output_bn_weight_decay)
         train_part["training"] = training_dict
 
     # Identifiers
@@ -638,7 +652,10 @@ def compare_configs(
             return
         if v1 is None and v2 is None:
             return
-        if isinstance(v1, (int, float)) and isinstance(v2, (int, float)):
+        if isinstance(v1, bool) or isinstance(v2, bool):
+            if type(v1) is not type(v2) or v1 != v2:
+                mismatches.append(f"{name} mismatch: checkpoint={v1}, current={v2}")
+        elif isinstance(v1, (int, float)) and isinstance(v2, (int, float)):
             if abs(float(v1) - float(v2)) > 1e-4:
                 mismatches.append(f"{name} mismatch: checkpoint={v1}, current={v2}")
         elif isinstance(v1, list) and isinstance(v2, list):
@@ -674,7 +691,8 @@ def compare_configs(
     curr_hd = current_cfg.get("head", {})
     head_keys = [
         "type", "feat_dim", "num_class", "margin_arc", "margin_am", "margin", "scale",
-        "m", "h", "t_alpha", "l_a", "u_a", "l_margin", "u_margin", "lamda", "numerical_policy"
+        "m", "h", "t_alpha", "l_a", "u_a", "l_margin", "u_margin", "lamda",
+        "detach_margin_norm", "numerical_policy",
     ]
     for key in head_keys:
         if full_strict:
@@ -748,6 +766,9 @@ def compare_configs(
             mismatches.append(f"Dataset {key} mismatch")
     if ckpt_opt.get("drop_last") != curr_opt.get("drop_last"):
         mismatches.append("Training drop_last mismatch")
+    for key in ("output_bn_freeze_bias", "output_bn_weight_decay"):
+        if ckpt_opt.get(key) != curr_opt.get(key):
+            mismatches.append(f"Training {key} mismatch")
     for key in ["seed", "stage", "parent_hash"]:
         if full_strict:
             if key in ckpt_cfg or key in current_cfg:

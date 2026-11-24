@@ -129,6 +129,16 @@ class DeferredLossMeter(AverageMeter):
             self.pending.clear()
 
 
+def _resolve_output_bn_module(model: nn.Module) -> nn.BatchNorm1d:
+    """Resolve and validate the final 1D BatchNorm module of the backbone."""
+    raw_model = model.module if hasattr(model, "module") else model
+    backbone = getattr(raw_model, "backbone", raw_model)
+    bn = getattr(backbone, "bn", None)
+    if not isinstance(bn, nn.BatchNorm1d) or bn.weight is None or bn.bias is None:
+        raise ValueError("Output BN control requires backbone.bn to be an affine nn.BatchNorm1d")
+    return bn
+
+
 class Trainer:
     """Trainer supporting ArcFace, AdaFace, and MagFace heads on MobileFaceNet."""
 
@@ -174,14 +184,44 @@ class Trainer:
         opt_name = train_cfg.get("optimizer", "adam").lower()
         lr = float(train_cfg.get("lr", 0.001))
         weight_decay = float(train_cfg.get("weight_decay", 0.0001))
+        self.output_bn_freeze_bias = bool(train_cfg.get("output_bn_freeze_bias", False))
+        raw_out_bn_wd = train_cfg.get("output_bn_weight_decay", None)
+        self.output_bn_weight_decay = float(raw_out_bn_wd) if raw_out_bn_wd is not None else None
+
+        output_bn = None
+        if self.output_bn_freeze_bias:
+            output_bn = _resolve_output_bn_module(self.model)
+            with torch.no_grad():
+                output_bn.bias.zero_()
+            output_bn.bias.requires_grad_(False)
+        if self.output_bn_weight_decay is not None:
+            output_bn = output_bn or _resolve_output_bn_module(self.model)
+            if not output_bn.weight.requires_grad:
+                raise ValueError("Output BN control requires backbone.bn.weight.requires_grad=True")
 
         # Select optimizer
-        params = [p for p in self.model.parameters() if p.requires_grad]
+        if self.output_bn_weight_decay is not None:
+            default_params = [p for p in self.model.parameters() if p.requires_grad and p is not output_bn.weight]
+            opt_params = [
+                {"params": default_params, "weight_decay": weight_decay, "name": "default"},
+                {"params": [output_bn.weight], "weight_decay": self.output_bn_weight_decay, "name": "output_bn_weight"},
+            ]
+        else:
+            opt_params = [p for p in self.model.parameters() if p.requires_grad]
+
         if opt_name == "adam":
-            self.optimizer = torch.optim.Adam(params, lr=lr, weight_decay=weight_decay)
+            self.optimizer = (
+                torch.optim.Adam(opt_params, lr=lr)
+                if self.output_bn_weight_decay is not None
+                else torch.optim.Adam(opt_params, lr=lr, weight_decay=weight_decay)
+            )
         elif opt_name == "sgd":
             momentum = float(train_cfg.get("momentum", 0.9))
-            self.optimizer = torch.optim.SGD(params, lr=lr, momentum=momentum, weight_decay=weight_decay)
+            self.optimizer = (
+                torch.optim.SGD(opt_params, lr=lr, momentum=momentum)
+                if self.output_bn_weight_decay is not None
+                else torch.optim.SGD(opt_params, lr=lr, momentum=momentum, weight_decay=weight_decay)
+            )
         else:
             logger.error(f"Unsupported optimizer: '{opt_name}'. Allowed: 'adam', 'sgd'")
             raise ValueError(f"Unknown optimizer: {opt_name}")
@@ -428,6 +468,11 @@ class Trainer:
             strict_config=strict_config,
             allow_unverified_resume=allow_unverified_resume,
         )
+        if self.output_bn_freeze_bias:
+            output_bn = _resolve_output_bn_module(self.model)
+            if output_bn.bias.requires_grad or torch.count_nonzero(output_bn.bias).item() != 0:
+                raise ValueError("Resumed checkpoint violates output_bn_freeze_bias=True (bn.bias must be frozen at 0)")
+            output_bn.bias.requires_grad_(False)
         with open(checkpoint_path, "rb") as source:
             source_hash = hashlib.file_digest(source, "sha256").hexdigest()
         self.last_saved_ckpt = str(Path(checkpoint_path).resolve())

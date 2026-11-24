@@ -115,7 +115,13 @@ def test_replacement_parent_is_not_baseline_or_old_model_reuse(cfg, tmp_path):
 
 
 @pytest.mark.parametrize('name', ['03_finetune.ipynb', '04_export_and_validate.ipynb'])
-@pytest.mark.parametrize('campaign', ['parent_control', 'finetune_wd_zero_control'])
+@pytest.mark.parametrize('campaign', [
+    'parent_control',
+    'finetune_wd_zero_control',
+    'finetune_output_bn_control',
+    'finetune_wd_zero_freeze_bias_control',
+    'finetune_detach_margin_control',
+])
 def test_followup_notebook_blocks_without_completed_parent_selection(cfg, tmp_path, monkeypatch, name, campaign):
     root = Path(__file__).resolve().parents[2]
     monkeypatch.chdir(root)
@@ -123,6 +129,9 @@ def test_followup_notebook_blocks_without_completed_parent_selection(cfg, tmp_pa
     monkeypatch.setattr(w,'resolve_settings',lambda *a,**kw: copy.deepcopy(cfg))
     notebook = json.loads((root/'fine-tune/notebooks'/name).read_text(encoding='utf-8'))
     source = ''.join(next(c for c in notebook['cells'] if c['cell_type']=='code')['source'])
+    source = source.replace('CAMPAIGN = "finetune_detach_margin_control"',f'CAMPAIGN = "{campaign}"')
+    source = source.replace('CAMPAIGN = "finetune_wd_zero_freeze_bias_control"',f'CAMPAIGN = "{campaign}"')
+    source = source.replace('CAMPAIGN = "finetune_output_bn_control"',f'CAMPAIGN = "{campaign}"')
     source = source.replace('CAMPAIGN = "finetune_wd_zero_control"',f'CAMPAIGN = "{campaign}"')
     source = source.replace('CAMPAIGN = "paper_baseline"',f'CAMPAIGN = "{campaign}"')
     with pytest.raises(FileNotFoundError):
@@ -145,7 +154,10 @@ def test_finetune_wd_zero_selection_changes_only_finetune_weight_decay(tmp_path)
     assert selection["reproduction_scope"]["finetune_control"]["schema"] == controls.FINETUNE_WD_ZERO_SCHEMA
     assert selection["reproduction_scope"]["finetune_control"]["reference_selection_sha256"] == "472022d0d95064fff9346e62b79062bcc0be5c408afa5b7618504c79258cc366"
     plan = s.inspect_selection(selection)
-    assert len(plan) == 1 and plan[0]["status"] == "train_new"
+    assert len(plan) == 1 and plan[0]["status"] in ("train_new", "reuse_completed")
+    fresh_sel = controls.build_finetune_wd_zero_selection(base, output_root=tmp_path / "fresh_wd0")
+    fresh_plan = s.inspect_selection(fresh_sel)
+    assert len(fresh_plan) == 1 and fresh_plan[0]["status"] == "train_new"
     diag = controls.diagnose_finetune_wd_zero_epochs(selection)
     assert [r["epoch"] for r in diag["epochs"]] == [1, 2, 5, 10, 40]
     assert diag["parent_before_finetune"]["norm_lt_10"] == 0
@@ -181,7 +193,7 @@ def test_finetune_wd_zero_selection_changes_only_finetune_weight_decay(tmp_path)
     ref_ckpt_40 = Path(selection["settings"]["campaign"]["finetune_control"]["reference_checkpoint"])
     ref_ckpt_1 = ref_ckpt_40.with_name("finetune_mobilefacenet_1024d_magface_epoch_1.pt")
     for old_ckpt in (ref_ckpt_1, ref_ckpt_40):
-        resumed_plan = s.inspect_selection(selection, {row["run_id"]: str(old_ckpt)})
+        resumed_plan = s.inspect_selection(fresh_sel, {row["run_id"]: str(old_ckpt)})
         assert resumed_plan[0]["status"] == "blocked"
         assert "weight_decay" in resumed_plan[0]["reason"]
     with pytest.raises(ValueError, match="weight_decay"):
@@ -255,3 +267,639 @@ def test_canonical_inventory_file_only_written_for_finetune_wd_zero_control(tmp_
     assert len(hashed) == 1
     assert (wd0_root / "inventory.json").is_file()
     assert (wd0_root / "inventory.json").read_text(encoding="utf-8") == hashed[0].read_text(encoding="utf-8")
+
+    obn_root = tmp_path / "obn_root"
+    obn_sel = copy.deepcopy(sel1)
+    obn_sel["root"] = str(obn_root)
+    obn_sel["settings"]["campaign"]["finetune_control"] = {"schema": controls.FINETUNE_OUTPUT_BN_SCHEMA}
+    s.execute_selection(obn_sel, "export")
+    obn_hashed = list((obn_root / "inventories").glob("*.json"))
+    assert len(obn_hashed) == 1
+    assert (obn_root / "inventory.json").is_file()
+    assert (obn_root / "inventory.json").read_text(encoding="utf-8") == obn_hashed[0].read_text(encoding="utf-8")
+
+
+def test_finetune_output_bn_selection_and_rejections(tmp_path):
+    settings_path = Path("F:/face_datasets/.state/facex/shared_v1_boundary/notebook_settings_mobilefacenet.json")
+    ref_sel = Path("F:/models/facex/diagnostics/parent_weight_decay_zero_v1/followup/selection.json")
+    if not (settings_path.is_file() and ref_sel.is_file()):
+        pytest.skip("Pinned WD=0 Parent followup artifacts unavailable")
+    from modules import selected_campaign as s
+    root = Path(__file__).resolve().parents[2]
+    base = w.resolve_settings(root, settings_path, require_saved=True)
+    out_root = tmp_path / "output_bn_v1"
+    selection = controls.build_finetune_output_bn_selection(base, output_root=out_root)
+    s.validate_selection(selection)
+    assert selection["purpose"] == "diagnostic_control"
+    assert selection["settings"]["training"]["weight_decay"] == 0.0001
+    assert selection["settings"]["training"]["output_bn_freeze_bias"] is True
+    assert selection["settings"]["training"]["output_bn_weight_decay"] == 0.0
+    assert selection["settings"]["training"]["save_freq"] == 1
+    assert selection["reproduction_scope"]["finetune_control"]["schema"] == controls.FINETUNE_OUTPUT_BN_SCHEMA
+    assert selection["reproduction_scope"]["finetune_control"]["reference_selection_sha256"] == "472022d0d95064fff9346e62b79062bcc0be5c408afa5b7618504c79258cc366"
+    plan = s.inspect_selection(selection)
+    assert len(plan) == 1 and plan[0]["status"] == "train_new"
+
+    # Zero-tolerance drift checks (margin_am, weight_decay=0.0, scale, output_bn toggles).
+    for mut in (
+        lambda c: c["heads"]["magface"].update(margin_am=0.0001),
+        lambda c: c["heads"]["magface"].update(scale=64.00002),
+        lambda c: c["training"].update(weight_decay=0.0),
+        lambda c: c["training"].update(output_bn_freeze_bias=False),
+        lambda c: c["training"].update(output_bn_weight_decay=0.0001),
+    ):
+        drifted = copy.deepcopy(base)
+        mut(drifted)
+        if drifted["training"].get("weight_decay") == 0.0 or drifted["training"].get("output_bn_freeze_bias") is False or drifted["training"].get("output_bn_weight_decay") is not None:
+            tampered_sel = copy.deepcopy(selection)
+            mut(tampered_sel["settings"])
+            with pytest.raises(ValueError):
+                s.settings_for(tampered_sel, tampered_sel["rows"][0])
+        else:
+            with pytest.raises(ValueError):
+                controls.build_finetune_output_bn_selection(drifted, output_root=tmp_path / "drift")
+            tampered_sel = copy.deepcopy(selection)
+            mut(tampered_sel["settings"])
+            with pytest.raises(ValueError):
+                s.settings_for(tampered_sel, tampered_sel["rows"][0])
+
+    # Schema tampering must fail selection validation and settings_for.
+    bad_schema = copy.deepcopy(selection)
+    bad_schema["settings"]["campaign"]["finetune_control"]["schema"] = "tampered-schema"
+    with pytest.raises(ValueError, match="schema"):
+        s.validate_selection(bad_schema)
+    with pytest.raises(ValueError, match="schema"):
+        s.settings_for(bad_schema, bad_schema["rows"][0])
+
+    # Block old ft_wd=0.0001 checkpoints and prior finetune_wd_zero_v1 checkpoints.
+    row = selection["rows"][0]
+    cfg = s.settings_for(selection, row)
+    ref_ckpt_40 = Path(selection["settings"]["campaign"]["finetune_control"]["reference_checkpoint"])
+    ref_ckpt_1 = ref_ckpt_40.with_name("finetune_mobilefacenet_1024d_magface_epoch_1.pt")
+    for old_ckpt in (ref_ckpt_1, ref_ckpt_40):
+        resumed_plan = s.inspect_selection(selection, {row["run_id"]: str(old_ckpt)})
+        assert resumed_plan[0]["status"] == "blocked"
+        with pytest.raises(ValueError):
+            s._validate(old_ckpt, cfg, row)
+    wd0_ckpt_40 = Path("F:/models/facex/diagnostics/parent_weight_decay_zero_v1/finetune_wd_zero_v1/checkpoint") / ref_ckpt_40.relative_to(Path("F:/models/facex/diagnostics/parent_weight_decay_zero_v1/followup/checkpoint"))
+    if wd0_ckpt_40.is_file():
+        resumed_wd0 = s.inspect_selection(selection, {row["run_id"]: str(wd0_ckpt_40)})
+        assert resumed_wd0[0]["status"] == "blocked"
+        with pytest.raises(ValueError):
+            s._validate(wd0_ckpt_40, cfg, row)
+
+    # Reject matching config metadata when optimizer param_groups or nonzero bn.bias violate contract.
+    fake_base = s.load_checkpoint(str(ref_ckpt_40))
+    fake_base["config"] = s._expected(cfg, row)
+    fake_base["config_hash"] = s.compute_config_hash(fake_base["config"])
+    fake_base.setdefault("extra_meta", {})["execution_settings"] = cfg
+
+    bad_pg_ckpt = tmp_path / "fake_bad_pg_epoch_40.pt"
+    bad_pg = copy.deepcopy(fake_base)
+    bad_pg["backbone_state_dict"]["bn.bias"].zero_()
+    torch.save(bad_pg, bad_pg_ckpt)
+    with pytest.raises(ValueError, match="param_groups"):
+        s._validate(bad_pg_ckpt, cfg, row)
+
+    bad_bias_ckpt = tmp_path / "fake_bad_bias_epoch_40.pt"
+    bad_bias = copy.deepcopy(fake_base)
+    p0 = bad_bias["optimizer_state_dict"]["param_groups"][0]
+    p_bn = copy.deepcopy(p0)
+    p0["name"] = "default"
+    p_bn["name"] = "output_bn_weight"
+    p_bn["weight_decay"] = 0.0
+    p_bn["params"] = [p0["params"].pop()]
+    bad_bias["optimizer_state_dict"]["param_groups"] = [p0, p_bn]
+    bad_bias["backbone_state_dict"]["bn.bias"].fill_(0.25)
+    torch.save(bad_bias, bad_bias_ckpt)
+    with pytest.raises(ValueError, match="bn.bias"):
+        s._validate(bad_bias_ckpt, cfg, row)
+
+    # Reject out-of-scope target rows under finetune_output_bn_control.
+    for bad_plan in (
+        [dict(dataset="tinyface", recipe="resize_only", heads=["magface"], seeds=[8972])],
+        [dict(dataset="survface", recipe="full_fr_resize_only", heads=["arcface"], seeds=[8972])],
+        [dict(dataset="survface", recipe="full_fr_resize_only", heads=["magface"], seeds=[1234])],
+    ):
+        with pytest.raises(ValueError, match="exactly one target row"):
+            s.make_selection(selection["settings"], bad_plan, tmp_path / "bad_obn_out",
+                             selection["diagnostic_root"], purpose="diagnostic_control")
+
+
+def test_output_bn_control_trainer_2epoch_smoke(cfg, tmp_path):
+    from modules.checkpoint_manager import compute_config_hash
+    cfg = copy.deepcopy(cfg)
+    cfg['training'].update(
+        epoches=2,
+        save_freq=1,
+        torch_threads=1,
+        weight_decay=0.0001,
+        output_bn_freeze_bias=True,
+        output_bn_weight_decay=0.0,
+    )
+    cfg['dataset']['val_list'] = None
+    cfg['project']['keep_raw_results'] = True
+    torch.set_num_threads(1)
+
+    def make_trainer(path, cap):
+        current = copy.deepcopy(cfg)
+        current['runtime'] = {'stop_after_epoch': cap}
+        w.set_seed(8972)
+        model = w.build_model(current['backbone'], dict(current['heads']['magface'], num_class=2))
+        with torch.no_grad():
+            model.backbone.bn.bias.fill_(0.5)  # Must be zeroed & frozen by Trainer.
+        train, val = w.make_loaders(current)
+        return Trainer(model, train, val, current, CheckpointManager(str(path)), torch.device('cpu'),
+                       head_type='magface', stage='pretrain')
+
+    ref = make_trainer(tmp_path / 'reference', None)
+    assert len(ref.optimizer.param_groups) == 2
+    assert [g['name'] for g in ref.optimizer.param_groups] == ['default', 'output_bn_weight']
+    assert [float(g['weight_decay']) for g in ref.optimizer.param_groups] == [0.0001, 0.0]
+    assert len(ref.optimizer.param_groups[1]['params']) == 1
+    assert ref.model.backbone.bn.bias.requires_grad is False
+    assert torch.count_nonzero(ref.model.backbone.bn.bias).item() == 0
+    ref.train(model_prefix='outbn')
+    expected = load_checkpoint(ref.last_saved_ckpt)
+    assert torch.count_nonzero(expected['backbone_state_dict']['bn.bias']).item() == 0
+    assert compute_config_hash(expected['config']) == expected['config_hash']
+    assert expected['config']['training']['output_bn_freeze_bias'] is True
+    assert expected['config']['training']['output_bn_weight_decay'] == 0.0
+
+    paused = make_trainer(tmp_path / 'paused', 1)
+    with pytest.raises(EpochLimitReached):
+        paused.train(model_prefix='outbn')
+    paused_ckpt = load_checkpoint(paused.last_saved_ckpt)
+    assert paused_ckpt['completed'] is False and paused_ckpt['epoch'] == 1
+    assert torch.count_nonzero(paused_ckpt['backbone_state_dict']['bn.bias']).item() == 0
+
+    resumed = make_trainer(tmp_path / 'paused', None)
+    start = resumed.resume_from_checkpoint(paused.last_saved_ckpt)
+    assert start == 2
+    assert resumed.model.backbone.bn.bias.requires_grad is False
+    assert torch.count_nonzero(resumed.model.backbone.bn.bias).item() == 0
+    resumed.train(start_epoch=start, model_prefix='outbn')
+    actual = load_checkpoint(resumed.last_saved_ckpt)
+    assert actual['completed'] is True
+    assert torch.count_nonzero(actual['backbone_state_dict']['bn.bias']).item() == 0
+    for group in ('backbone_state_dict', 'head_state_dict'):
+        assert all(torch.equal(v, actual[group][k]) for k, v in expected[group].items())
+    assert actual['scheduler_state_dict'] == expected['scheduler_state_dict']
+    assert actual['optimizer_state_dict']['param_groups'] == expected['optimizer_state_dict']['param_groups']
+    for key, state in expected['optimizer_state_dict']['state'].items():
+        for name, value in state.items():
+            assert torch.equal(value, actual['optimizer_state_dict']['state'][key][name])
+    export_mgr = CheckpointManager(str(tmp_path / 'export'))
+    exported_path = export_mgr.export_backbone_only(
+        resumed.model,
+        'magface_outbn.pt',
+        {'stage': 'export', 'completed': True, 'is_smoke': False, 'feat_dim': 8},
+        target_feat_dim=8,
+    )
+    exported = torch.load(exported_path, map_location='cpu', weights_only=True)
+    assert torch.count_nonzero(exported['state_dict']['bn.bias']).item() == 0
+
+
+def test_finetune_wd_zero_freeze_bias_selection_and_2epoch_resume(cfg, tmp_path):
+    settings_path = Path("F:/face_datasets/.state/facex/shared_v1_boundary/notebook_settings_mobilefacenet.json")
+    ref_sel = Path("F:/models/facex/diagnostics/parent_weight_decay_zero_v1/followup/selection.json")
+    if settings_path.is_file() and ref_sel.is_file():
+        from modules import selected_campaign as s
+        root = Path(__file__).resolve().parents[2]
+        base = w.resolve_settings(root, settings_path, require_saved=True)
+        out_root = tmp_path / "wd0_freezebias_v1"
+        selection = controls.build_finetune_wd_zero_freeze_bias_selection(base, output_root=out_root)
+        s.validate_selection(selection)
+        assert selection["purpose"] == "diagnostic_control"
+        assert selection["settings"]["training"]["weight_decay"] == 0.0
+        assert selection["settings"]["training"]["output_bn_freeze_bias"] is True
+        assert "output_bn_weight_decay" not in selection["settings"]["training"]
+        assert selection["settings"]["training"]["save_freq"] == 1
+        assert selection["reproduction_scope"]["finetune_control"]["schema"] == controls.FINETUNE_WD_ZERO_FREEZE_BIAS_SCHEMA
+        assert s.inspect_selection(selection)[0]["status"] == "train_new"
+
+        for mut in (
+            lambda c: c["heads"]["magface"].update(margin_am=0.0001),
+            lambda c: c["heads"]["magface"].update(scale=64.00002),
+            lambda c: c["training"].update(weight_decay=0.0001),
+            lambda c: c["training"].update(output_bn_freeze_bias=False),
+            lambda c: c["training"].update(output_bn_weight_decay=0.0),
+        ):
+            tampered_sel = copy.deepcopy(selection)
+            mut(tampered_sel["settings"])
+            with pytest.raises(ValueError):
+                s.settings_for(tampered_sel, tampered_sel["rows"][0])
+
+        # Block prior followup, wd0, and output_bn checkpoints.
+        row = selection["rows"][0]
+        row_cfg = s.settings_for(selection, row)
+        ref_ckpt_40 = Path(selection["settings"]["campaign"]["finetune_control"]["reference_checkpoint"])
+        rel_tail = ref_ckpt_40.relative_to(Path("F:/models/facex/diagnostics/parent_weight_decay_zero_v1/followup/checkpoint"))
+        for old_ckpt in (
+            ref_ckpt_40.with_name("finetune_mobilefacenet_1024d_magface_epoch_1.pt"),
+            ref_ckpt_40,
+            Path("F:/models/facex/diagnostics/parent_weight_decay_zero_v1/finetune_wd_zero_v1/checkpoint") / rel_tail,
+            Path("F:/models/facex/diagnostics/parent_weight_decay_zero_v1/finetune_output_bn_v1/checkpoint") / rel_tail,
+        ):
+            if old_ckpt.is_file():
+                assert s.inspect_selection(selection, {row["run_id"]: str(old_ckpt)})[0]["status"] == "blocked"
+                with pytest.raises(ValueError):
+                    s._validate(old_ckpt, row_cfg, row)
+
+        # Reject matching config metadata with nonzero bn.bias or 2 param_groups.
+        fake_base = s.load_checkpoint(str(ref_ckpt_40))
+        fake_base["config"] = s._expected(row_cfg, row)
+        fake_base["config_hash"] = s.compute_config_hash(fake_base["config"])
+        fake_base.setdefault("extra_meta", {})["execution_settings"] = row_cfg
+        fake_base["optimizer_state_dict"]["param_groups"][0]["weight_decay"] = 0.0
+
+        bad_bias_ckpt = tmp_path / "fake_bad_bias.pt"
+        bad_bias = copy.deepcopy(fake_base)
+        bad_bias["backbone_state_dict"]["bn.bias"].fill_(0.1)
+        torch.save(bad_bias, bad_bias_ckpt)
+        with pytest.raises(ValueError, match="bn.bias"):
+            s._validate(bad_bias_ckpt, row_cfg, row)
+
+        bad_pg_ckpt = tmp_path / "fake_two_pg.pt"
+        bad_pg = copy.deepcopy(fake_base)
+        bad_pg["backbone_state_dict"]["bn.bias"].zero_()
+        p0 = bad_pg["optimizer_state_dict"]["param_groups"][0]
+        p1 = copy.deepcopy(p0)
+        p1["params"] = [p0["params"].pop()]
+        bad_pg["optimizer_state_dict"]["param_groups"] = [p0, p1]
+        torch.save(bad_pg, bad_pg_ckpt)
+        with pytest.raises(ValueError, match="single optimizer param_group"):
+            s._validate(bad_pg_ckpt, row_cfg, row)
+
+    # Real 2-epoch CPU Trainer run: weight_decay=0.0 + output_bn_freeze_bias=True, pause at 1 & resume to 2.
+    from modules.checkpoint_manager import compute_config_hash
+    run_cfg = copy.deepcopy(cfg)
+    run_cfg['training'].update(
+        epoches=2,
+        save_freq=1,
+        torch_threads=1,
+        weight_decay=0.0,
+        output_bn_freeze_bias=True,
+    )
+    run_cfg['training'].pop('output_bn_weight_decay', None)
+    run_cfg['dataset']['val_list'] = None
+    run_cfg['project']['keep_raw_results'] = True
+    torch.set_num_threads(1)
+
+    def make_trainer(path, cap):
+        current = copy.deepcopy(run_cfg)
+        current['runtime'] = {'stop_after_epoch': cap}
+        w.set_seed(8972)
+        model = w.build_model(current['backbone'], dict(current['heads']['magface'], num_class=2))
+        with torch.no_grad():
+            model.backbone.bn.bias.fill_(0.5)
+        train, val = w.make_loaders(current)
+        return Trainer(model, train, val, current, CheckpointManager(str(path)), torch.device('cpu'),
+                       head_type='magface', stage='pretrain')
+
+    ref = make_trainer(tmp_path / 'ref_wd0_fb', None)
+    assert len(ref.optimizer.param_groups) == 1
+    assert float(ref.optimizer.param_groups[0]['weight_decay']) == 0.0
+    assert ref.model.backbone.bn.bias.requires_grad is False
+    assert torch.count_nonzero(ref.model.backbone.bn.bias).item() == 0
+    ref.train(model_prefix='wd0fb')
+    expected = load_checkpoint(ref.last_saved_ckpt)
+
+    paused = make_trainer(tmp_path / 'paused_wd0_fb', 1)
+    with pytest.raises(EpochLimitReached):
+        paused.train(model_prefix='wd0fb')
+    resumed = make_trainer(tmp_path / 'paused_wd0_fb', None)
+    start = resumed.resume_from_checkpoint(paused.last_saved_ckpt)
+    assert start == 2
+    assert resumed.model.backbone.bn.bias.requires_grad is False
+    assert torch.count_nonzero(resumed.model.backbone.bn.bias).item() == 0
+    resumed.train(start_epoch=start, model_prefix='wd0fb')
+    actual = load_checkpoint(resumed.last_saved_ckpt)
+    assert actual['completed'] is True
+    assert torch.count_nonzero(actual['backbone_state_dict']['bn.bias']).item() == 0
+    assert actual['config']['training']['output_bn_freeze_bias'] is True
+    assert 'output_bn_weight_decay' not in actual['config']['training']
+    assert compute_config_hash(actual['config']) == actual['config_hash']
+    for group in ('backbone_state_dict', 'head_state_dict'):
+        assert all(torch.equal(v, actual[group][k]) for k, v in expected[group].items())
+    assert actual['scheduler_state_dict'] == expected['scheduler_state_dict']
+    assert actual['optimizer_state_dict']['param_groups'] == expected['optimizer_state_dict']['param_groups']
+    for key, state in expected['optimizer_state_dict']['state'].items():
+        for name, value in state.items():
+            assert torch.equal(value, actual['optimizer_state_dict']['state'][key][name])
+
+
+def test_magface_detach_margin_norm_gradient_contract(cfg):
+    import torch.nn.functional as F
+    from modules.checkpoint_manager import extract_model_config, compare_configs
+    from modules.target_margin import MagFace
+
+    with pytest.raises(ValueError, match="boolean"):
+        w.build_model(cfg['backbone'], dict(cfg['heads']['magface'], num_class=4, detach_margin_norm=1))
+    with pytest.raises(TypeError, match="boolean"):
+        MagFace(detach_margin_norm=1)
+
+    w.set_seed(8972)
+    model_off = w.build_model(cfg['backbone'], dict(cfg['heads']['magface'], num_class=4))
+    model_on = w.build_model(cfg['backbone'], dict(cfg['heads']['magface'], num_class=4, detach_margin_norm=True))
+    model_on.load_state_dict(model_off.state_dict())
+    assert model_off.head.detach_margin_norm is False
+    assert model_on.head.detach_margin_norm is True
+
+    cfg_off = extract_model_config(model_off)
+    cfg_on = extract_model_config(model_on)
+    assert "detach_margin_norm" not in cfg_off["head"]
+    assert cfg_on["head"]["detach_margin_norm"] is True
+    diffs = compare_configs(cfg_off, cfg_on, full_strict=True)
+    assert any("detach_margin_norm" in msg for msg in diffs)
+
+    base = F.normalize(torch.randn(4, cfg['backbone']['feat_dim']), dim=1) * 25.0
+    labels = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+
+    f_off = base.clone().detach().requires_grad_(True)
+    f_on = base.clone().detach().requires_grad_(True)
+    logits_off, reg_off = model_off.head(f_off, labels)
+    logits_on, reg_on = model_on.head(f_on, labels)
+    assert torch.equal(logits_off, logits_on)
+    assert torch.equal(reg_off, reg_on)
+
+    F.cross_entropy(logits_off, labels).backward()
+    F.cross_entropy(logits_on, labels).backward()
+    rad_off = (f_off.grad * f_off).sum(dim=1)
+    rad_on = (f_on.grad * f_on).sum(dim=1)
+    unit_rad_on = (f_on.grad * F.normalize(f_on, dim=1)).sum(dim=1)
+    assert torch.all(rad_off > 0)
+    assert float(rad_on.abs().max()) < 1e-5
+    assert float(unit_rad_on.abs().max()) < 1e-6
+
+    f_reg = base.clone().detach().requires_grad_(True)
+    _, reg_only = model_on.head(f_reg, labels)
+    reg_only.mean().backward()
+    assert torch.all((f_reg.grad * f_reg).sum(dim=1) < 0)
+
+    f_tot = base.clone().detach().requires_grad_(True)
+    logits_tot, reg_tot = model_on.head(f_tot, labels)
+    (F.cross_entropy(logits_tot, labels) + reg_tot.mean()).backward()
+    assert torch.all((f_tot.grad * f_tot).sum(dim=1) < 0)
+
+
+def test_finetune_detach_margin_selection_and_2epoch_resume(cfg, tmp_path):
+    settings_path = Path("F:/face_datasets/.state/facex/shared_v1_boundary/notebook_settings_mobilefacenet.json")
+    ref_sel = Path("F:/models/facex/diagnostics/parent_weight_decay_zero_v1/followup/selection.json")
+    if settings_path.is_file() and ref_sel.is_file():
+        from modules import selected_campaign as s
+        root = Path(__file__).resolve().parents[2]
+        base = w.resolve_settings(root, settings_path, require_saved=True)
+        out_root = tmp_path / "detach_margin_v1"
+        selection = controls.build_finetune_detach_margin_selection(base, output_root=out_root)
+        s.validate_selection(selection)
+        assert selection["purpose"] == "diagnostic_control"
+        assert selection["settings"]["training"]["weight_decay"] == 0.0
+        assert selection["settings"]["training"]["output_bn_freeze_bias"] is True
+        assert "output_bn_weight_decay" not in selection["settings"]["training"]
+        assert selection["settings"]["training"]["save_freq"] == 1
+        assert selection["settings"]["heads"]["magface"]["detach_margin_norm"] is True
+        assert selection["reproduction_scope"]["finetune_control"]["schema"] == controls.FINETUNE_DETACH_MARGIN_SCHEMA
+        assert s.inspect_selection(selection)[0]["status"] == "train_new"
+
+        for mut in (
+            lambda c: c["heads"]["magface"].update(margin_am=0.0001),
+            lambda c: c["heads"]["magface"].update(scale=64.00002),
+            lambda c: c["training"].update(weight_decay=0.0001),
+            lambda c: c["training"].update(output_bn_freeze_bias=False),
+            lambda c: c["training"].update(output_bn_weight_decay=0.0),
+            lambda c: c["heads"]["magface"].update(detach_margin_norm=False),
+            lambda c: c["heads"]["magface"].pop("detach_margin_norm", None),
+        ):
+            tampered_sel = copy.deepcopy(selection)
+            mut(tampered_sel["settings"])
+            with pytest.raises(ValueError):
+                s.settings_for(tampered_sel, tampered_sel["rows"][0])
+
+        # Block prior followup, wd0, output_bn, and freeze_bias checkpoints.
+        row = selection["rows"][0]
+        row_cfg = s.settings_for(selection, row)
+        ref_ckpt_40 = Path(selection["settings"]["campaign"]["finetune_control"]["reference_checkpoint"])
+        rel_tail = ref_ckpt_40.relative_to(Path("F:/models/facex/diagnostics/parent_weight_decay_zero_v1/followup/checkpoint"))
+        rel_ep2 = rel_tail.with_name("finetune_mobilefacenet_1024d_magface_epoch_2.pt")
+        for old_ckpt in (
+            ref_ckpt_40.with_name("finetune_mobilefacenet_1024d_magface_epoch_1.pt"),
+            ref_ckpt_40,
+            Path("F:/models/facex/diagnostics/parent_weight_decay_zero_v1/finetune_wd_zero_v1/checkpoint") / rel_tail,
+            Path("F:/models/facex/diagnostics/parent_weight_decay_zero_v1/finetune_output_bn_v1/checkpoint") / rel_tail,
+            Path("F:/models/facex/diagnostics/parent_weight_decay_zero_v1/finetune_wd_zero_freeze_bias_v1/checkpoint") / rel_ep2,
+            Path("F:/models/facex/diagnostics/parent_weight_decay_zero_v1/finetune_wd_zero_freeze_bias_v1/checkpoint") / rel_tail,
+        ):
+            if old_ckpt.is_file():
+                assert s.inspect_selection(selection, {row["run_id"]: str(old_ckpt)})[0]["status"] == "blocked"
+                with pytest.raises(ValueError):
+                    s._validate(old_ckpt, row_cfg, row)
+
+        # Reject matching config metadata with nonzero bn.bias, or missing/False detach_margin_norm.
+        fake_base = s.load_checkpoint(str(ref_ckpt_40))
+        fake_base["config"] = s._expected(row_cfg, row)
+        fake_base["config_hash"] = s.compute_config_hash(fake_base["config"])
+        fake_base.setdefault("extra_meta", {})["execution_settings"] = row_cfg
+        fake_base["optimizer_state_dict"]["param_groups"][0]["weight_decay"] = 0.0
+
+        bad_bias_ckpt = tmp_path / "fake_dm_bad_bias.pt"
+        bad_bias = copy.deepcopy(fake_base)
+        bad_bias["backbone_state_dict"]["bn.bias"].fill_(0.1)
+        torch.save(bad_bias, bad_bias_ckpt)
+        with pytest.raises(ValueError, match="bn.bias"):
+            s._validate(bad_bias_ckpt, row_cfg, row)
+
+        bad_miss_ckpt = tmp_path / "fake_dm_missing.pt"
+        bad_miss = copy.deepcopy(fake_base)
+        bad_miss["backbone_state_dict"]["bn.bias"].zero_()
+        bad_miss["config"]["head"].pop("detach_margin_norm", None)
+        bad_miss["config_hash"] = s.compute_config_hash(bad_miss["config"])
+        torch.save(bad_miss, bad_miss_ckpt)
+        with pytest.raises(ValueError):
+            s._validate(bad_miss_ckpt, row_cfg, row)
+
+        bad_false_ckpt = tmp_path / "fake_dm_false.pt"
+        bad_false = copy.deepcopy(fake_base)
+        bad_false["backbone_state_dict"]["bn.bias"].zero_()
+        bad_false["config"]["head"]["detach_margin_norm"] = False
+        bad_false["config_hash"] = s.compute_config_hash(bad_false["config"])
+        torch.save(bad_false, bad_false_ckpt)
+        with pytest.raises(ValueError):
+            s._validate(bad_false_ckpt, row_cfg, row)
+
+    # Real 2-epoch CPU Trainer run: Stage 3 + heads.magface.detach_margin_norm=True, pause at 1 & resume to 2.
+    from modules.checkpoint_manager import compute_config_hash
+    run_cfg = copy.deepcopy(cfg)
+    run_cfg['training'].update(
+        epoches=2,
+        save_freq=1,
+        torch_threads=1,
+        weight_decay=0.0,
+        output_bn_freeze_bias=True,
+    )
+    run_cfg['training'].pop('output_bn_weight_decay', None)
+    run_cfg['heads']['magface']['detach_margin_norm'] = True
+    run_cfg['dataset']['val_list'] = None
+    run_cfg['project']['keep_raw_results'] = True
+    torch.set_num_threads(1)
+
+    def make_trainer(path, cap):
+        current = copy.deepcopy(run_cfg)
+        current['runtime'] = {'stop_after_epoch': cap}
+        w.set_seed(8972)
+        model = w.build_model(current['backbone'], dict(current['heads']['magface'], num_class=2))
+        with torch.no_grad():
+            model.backbone.bn.bias.fill_(0.5)
+        train, val = w.make_loaders(current)
+        return Trainer(model, train, val, current, CheckpointManager(str(path)), torch.device('cpu'),
+                       head_type='magface', stage='pretrain')
+
+    ref = make_trainer(tmp_path / 'ref_dm', None)
+    assert len(ref.optimizer.param_groups) == 1
+    assert float(ref.optimizer.param_groups[0]['weight_decay']) == 0.0
+    assert ref.model.backbone.bn.bias.requires_grad is False
+    assert torch.count_nonzero(ref.model.backbone.bn.bias).item() == 0
+    assert ref.model.head.detach_margin_norm is True
+    ref.train(model_prefix='dm')
+    expected = load_checkpoint(ref.last_saved_ckpt)
+
+    paused = make_trainer(tmp_path / 'paused_dm', 1)
+    with pytest.raises(EpochLimitReached):
+        paused.train(model_prefix='dm')
+    resumed = make_trainer(tmp_path / 'paused_dm', None)
+    start = resumed.resume_from_checkpoint(paused.last_saved_ckpt)
+    assert start == 2
+    assert resumed.model.backbone.bn.bias.requires_grad is False
+    assert torch.count_nonzero(resumed.model.backbone.bn.bias).item() == 0
+    assert resumed.model.head.detach_margin_norm is True
+    resumed.train(start_epoch=start, model_prefix='dm')
+    actual = load_checkpoint(resumed.last_saved_ckpt)
+    assert actual['completed'] is True
+    assert torch.count_nonzero(actual['backbone_state_dict']['bn.bias']).item() == 0
+    assert actual['config']['training']['output_bn_freeze_bias'] is True
+    assert 'output_bn_weight_decay' not in actual['config']['training']
+    assert actual['config']['head']['detach_margin_norm'] is True
+    assert compute_config_hash(actual['config']) == actual['config_hash']
+    for group in ('backbone_state_dict', 'head_state_dict'):
+        assert all(torch.equal(v, actual[group][k]) for k, v in expected[group].items())
+    assert actual['scheduler_state_dict'] == expected['scheduler_state_dict']
+    assert actual['optimizer_state_dict']['param_groups'] == expected['optimizer_state_dict']['param_groups']
+    for key, state in expected['optimizer_state_dict']['state'].items():
+        for name, value in state.items():
+            assert torch.equal(value, actual['optimizer_state_dict']['state'][key][name])
+
+
+def test_finetune_detach_margin_lr_0002_control_contracts(tmp_path):
+    from modules import selected_campaign as s
+
+    settings_path = Path("F:/face_datasets/.state/facex/shared_v1_boundary/notebook_settings_mobilefacenet.json")
+    ref_sel = Path("F:/models/facex/diagnostics/parent_weight_decay_zero_v1/followup/selection.json")
+    if not settings_path.is_file() or not ref_sel.is_file():
+        pytest.skip("Real parent followup assets unavailable in this environment")
+
+    root = Path(__file__).resolve().parents[2]
+    base = w.resolve_settings(root, settings_path, require_saved=True)
+    out_root = tmp_path / "detach_margin_lr0002_v1"
+    selection = controls.build_finetune_detach_margin_lr_0002_selection(base, output_root=out_root)
+    s.validate_selection(selection)
+    assert selection["purpose"] == "diagnostic_control"
+    assert selection["settings"]["training"]["lr"] == 0.0002
+    assert selection["settings"]["training"]["weight_decay"] == 0.0
+    assert selection["settings"]["training"]["output_bn_freeze_bias"] is True
+    assert "output_bn_weight_decay" not in selection["settings"]["training"]
+    assert selection["settings"]["training"]["save_freq"] == 1
+    assert selection["settings"]["heads"]["magface"]["detach_margin_norm"] is True
+    assert selection["reproduction_scope"]["finetune_control"]["schema"] == controls.FINETUNE_DETACH_MARGIN_LR_0002_SCHEMA
+    assert s.inspect_selection(selection)[0]["status"] == "train_new"
+
+    row = selection["rows"][0]
+    row_cfg = s.settings_for(selection, row)
+    ft_ctrl = row_cfg["campaign"]["finetune_control"]
+    binding = row_cfg["campaign"]["parent_binding"]
+
+    # validate_finetune_control_spec accepts lr=0.0002 and rejects other LRs
+    controls.validate_finetune_control_spec(
+        ft_ctrl, binding, 0.0, rows=[row],
+        training_cfg=row_cfg["training"], head_cfg=row_cfg["heads"]["magface"],
+    )
+    for bad_lr in (0.001, 0.0005, True):
+        bad_tr = {**row_cfg["training"], "lr": bad_lr}
+        with pytest.raises(ValueError):
+            controls.validate_finetune_control_spec(
+                ft_ctrl, binding, 0.0, rows=[row],
+                training_cfg=bad_tr, head_cfg=row_cfg["heads"]["magface"],
+            )
+
+    # Prior non-LR schemas must reject lr=0.0002
+    dm_sel_path = Path("F:/models/facex/diagnostics/parent_weight_decay_zero_v1/finetune_detach_margin_v1/selection.json")
+    if dm_sel_path.is_file():
+        dm_sel = s.load_selection(dm_sel_path)
+        dm_ft = dm_sel["settings"]["campaign"]["finetune_control"]
+        dm_bind = dm_sel["settings"]["campaign"]["parent_binding"]
+        with pytest.raises(ValueError, match="lr=0.001"):
+            controls.validate_finetune_control_spec(
+                dm_ft, dm_bind, 0.0, rows=[row],
+                training_cfg={**dm_sel["settings"]["training"], "lr": 0.0002},
+                head_cfg=dm_sel["settings"]["heads"]["magface"],
+            )
+
+    # require_only_finetune_detach_margin_lr_0002_control passes exact, fails on milestones or dropout_rate change
+    for mut in (
+        lambda c: c["training"].update(milestones=[5, 10, 15]),
+        lambda c: c["backbone"].update(dropout_rate=0.0),
+        lambda c: c["training"].update(lr=0.001),
+    ):
+        tampered = copy.deepcopy(selection)
+        mut(tampered["settings"])
+        with pytest.raises(ValueError):
+            s.settings_for(tampered, tampered["rows"][0])
+
+    # verify_finetune_detach_margin_lr_0002_checkpoint_payload: accepts Epoch 10 with decayed lr=2e-5 and initial_lr=0.0002
+    ref_ckpt_40 = Path(ft_ctrl["reference_checkpoint"])
+    expected_cfg = s._expected(row_cfg, row)
+    fake_base = s.load_checkpoint(str(ref_ckpt_40))
+    fake_base["epoch"] = 10
+    fake_base["completed"] = False
+    fake_base["config"] = copy.deepcopy(expected_cfg)
+    fake_base["config_hash"] = s.compute_config_hash(fake_base["config"])
+    fake_base.setdefault("extra_meta", {})["execution_settings"] = row_cfg
+    fake_base["backbone_state_dict"]["bn.bias"].zero_()
+    fake_base["optimizer_state_dict"]["param_groups"][0]["weight_decay"] = 0.0
+    fake_base["optimizer_state_dict"]["param_groups"][0]["initial_lr"] = 0.0002
+    fake_base["optimizer_state_dict"]["param_groups"][0]["lr"] = 2e-5
+
+    good_ep10 = tmp_path / "good_b2_ep10.pt"
+    torch.save(fake_base, good_ep10)
+    controls.verify_finetune_detach_margin_lr_0002_checkpoint_payload(
+        s.load_checkpoint(str(good_ep10)), good_ep10, row_cfg, expected_cfg, completed=False
+    )
+
+    # Rejects lr=0.001, nonzero bn.bias, or checkpoint located inside finetune_detach_margin_v1
+    bad_lr_ckpt = tmp_path / "bad_b2_lr001.pt"
+    bad_lr = copy.deepcopy(fake_base)
+    bad_lr["config"]["training"]["lr"] = 0.001
+    bad_lr["config_hash"] = s.compute_config_hash(bad_lr["config"])
+    torch.save(bad_lr, bad_lr_ckpt)
+    with pytest.raises(ValueError):
+        s._validate(bad_lr_ckpt, row_cfg, row, completed=False)
+
+    bad_bias_ckpt = tmp_path / "bad_b2_bias.pt"
+    bad_bias = copy.deepcopy(fake_base)
+    bad_bias["backbone_state_dict"]["bn.bias"].fill_(0.05)
+    torch.save(bad_bias, bad_bias_ckpt)
+    with pytest.raises(ValueError, match="bn.bias"):
+        s._validate(bad_bias_ckpt, row_cfg, row, completed=False)
+
+    dm_ckpt = Path(
+        "F:/models/facex/diagnostics/parent_weight_decay_zero_v1/finetune_detach_margin_v1"
+        "/checkpoint/survface_magface_full_fr_resize_only_s8972/finetune_survface_magface_seed8972"
+        "/finetune_mobilefacenet_1024d_magface_epoch_40.pt"
+    )
+    if dm_ckpt.is_file():
+        with pytest.raises(ValueError):
+            s._validate(dm_ckpt, row_cfg, row, completed=True)
+        with pytest.raises(ValueError):
+            controls.verify_finetune_detach_margin_lr_0002_checkpoint_payload(
+                copy.deepcopy(fake_base), dm_ckpt, row_cfg, expected_cfg, completed=True
+            )
+

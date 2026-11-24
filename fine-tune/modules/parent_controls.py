@@ -19,6 +19,14 @@ from .checkpoint_manager import compute_sha256, load_checkpoint, verify_parent_c
 SCHEMA = "facex-parent-weight-decay-control-v1"
 FINETUNE_WD_ZERO_SCHEMA = "facex-finetune-weight-decay-control-v1"
 FINETUNE_WD_ZERO_SUBDIR = "finetune_wd_zero_v1"
+FINETUNE_OUTPUT_BN_SCHEMA = "facex-finetune-output-bn-control-v1"
+FINETUNE_OUTPUT_BN_SUBDIR = "finetune_output_bn_v1"
+FINETUNE_WD_ZERO_FREEZE_BIAS_SCHEMA = "facex-finetune-wd-zero-freeze-bias-control-v1"
+FINETUNE_WD_ZERO_FREEZE_BIAS_SUBDIR = "finetune_wd_zero_freeze_bias_v1"
+FINETUNE_DETACH_MARGIN_SCHEMA = "facex-finetune-detach-margin-control-v1"
+FINETUNE_DETACH_MARGIN_SUBDIR = "finetune_detach_margin_v1"
+FINETUNE_DETACH_MARGIN_LR_0002_SCHEMA = "facex-finetune-detach-margin-lr-0002-control-v1"
+FINETUNE_DETACH_MARGIN_LR_0002_SUBDIR = "finetune_detach_margin_lr_0002_v1"
 FINETUNE_WD_ZERO_RUN_ID = "survface_magface_full_fr_resize_only_s8972"
 FINETUNE_WD_ZERO_EXPECTED_ROW = dict(
     run_id=FINETUNE_WD_ZERO_RUN_ID,
@@ -267,20 +275,98 @@ def make_followup_selection(baseline, parent_path, parent_sha256, control_root):
     return path
 
 
-def validate_finetune_control_spec(ft_control, parent_binding, training_wd, *, rows=None):
-    """Enforce exact schema, values, and single target row for the fine-tune weight_decay=0.0 diagnostic control."""
+def validate_finetune_control_spec(ft_control, parent_binding, training_wd, *, rows=None, training_cfg=None, head_cfg=None):
+    """Enforce exact schema, values, and single target row for fine-tune diagnostic controls."""
     if not isinstance(ft_control, dict) or set(ft_control) != REQUIRED_FINETUNE_CONTROL_KEYS:
         raise ValueError("Invalid finetune_control declaration keys")
-    if (ft_control.get("schema") != FINETUNE_WD_ZERO_SCHEMA
-            or ft_control.get("purpose") != "diagnostic_control"
-            or ft_control.get("changed_parameter") != "training.weight_decay"
-            or type(ft_control.get("reference_value")) is not float
-            or ft_control.get("reference_value") != 0.0001
-            or type(ft_control.get("control_value")) is not float
-            or ft_control.get("control_value") != 0.0
-            or type(training_wd) not in (int, float)
-            or float(training_wd) != 0.0):
-        raise ValueError("Fine-tune weight_decay control requires schema=facex-finetune-weight-decay-control-v1 and training.weight_decay=0.0")
+    schema = ft_control.get("schema")
+    if ft_control.get("purpose") != "diagnostic_control" or type(training_wd) not in (int, float):
+        raise ValueError("Fine-tune control requires purpose=diagnostic_control and numeric training.weight_decay")
+    if schema == FINETUNE_WD_ZERO_SCHEMA:
+        if (ft_control.get("changed_parameter") != "training.weight_decay"
+                or type(ft_control.get("reference_value")) is not float
+                or ft_control.get("reference_value") != 0.0001
+                or type(ft_control.get("control_value")) is not float
+                or ft_control.get("control_value") != 0.0
+                or float(training_wd) != 0.0):
+            raise ValueError("Fine-tune weight_decay control requires schema=facex-finetune-weight-decay-control-v1 and training.weight_decay=0.0")
+        if training_cfg is not None and (
+                training_cfg.get("output_bn_freeze_bias") or training_cfg.get("output_bn_weight_decay") is not None):
+            raise ValueError("finetune_wd_zero_control must not enable output BN freeze/selective decay options")
+        if head_cfg is not None and head_cfg.get("detach_margin_norm"):
+            raise ValueError("finetune_wd_zero_control must not enable MagFace detach_margin_norm")
+    elif schema == FINETUNE_OUTPUT_BN_SCHEMA:
+        expected_ref = {"weight_decay": 0.0001, "output_bn_freeze_bias": False, "output_bn_weight_decay": None}
+        expected_ctrl = {"weight_decay": 0.0001, "output_bn_freeze_bias": True, "output_bn_weight_decay": 0.0}
+        if (ft_control.get("changed_parameter") != "training.output_bn_freeze_bias+output_bn_weight_decay"
+                or ft_control.get("reference_value") != expected_ref
+                or ft_control.get("control_value") != expected_ctrl
+                or float(training_wd) != 0.0001):
+            raise ValueError("Output BN control requires schema=facex-finetune-output-bn-control-v1 and training.weight_decay=0.0001")
+        if training_cfg is not None:
+            out_bn_wd = training_cfg.get("output_bn_weight_decay")
+            if (training_cfg.get("output_bn_freeze_bias") is not True
+                    or type(out_bn_wd) not in (int, float)
+                    or float(out_bn_wd) != 0.0):
+                raise ValueError("finetune_output_bn_control requires output_bn_freeze_bias=True and output_bn_weight_decay=0.0")
+        if head_cfg is not None and head_cfg.get("detach_margin_norm"):
+            raise ValueError("finetune_output_bn_control must not enable MagFace detach_margin_norm")
+    elif schema == FINETUNE_WD_ZERO_FREEZE_BIAS_SCHEMA:
+        expected_ref = {"weight_decay": 0.0001, "output_bn_freeze_bias": False}
+        expected_ctrl = {"weight_decay": 0.0, "output_bn_freeze_bias": True}
+        if (ft_control.get("changed_parameter") != "training.weight_decay+output_bn_freeze_bias"
+                or ft_control.get("reference_value") != expected_ref
+                or ft_control.get("control_value") != expected_ctrl
+                or float(training_wd) != 0.0):
+            raise ValueError("WD=0 + frozen output BN bias control requires schema=facex-finetune-wd-zero-freeze-bias-control-v1 and training.weight_decay=0.0")
+        if training_cfg is not None and (
+                training_cfg.get("output_bn_freeze_bias") is not True
+                or training_cfg.get("output_bn_weight_decay") is not None):
+            raise ValueError("finetune_wd_zero_freeze_bias_control requires output_bn_freeze_bias=True and output_bn_weight_decay=None")
+        if head_cfg is not None and head_cfg.get("detach_margin_norm"):
+            raise ValueError("finetune_wd_zero_freeze_bias_control must not enable MagFace detach_margin_norm")
+    elif schema == FINETUNE_DETACH_MARGIN_SCHEMA:
+        expected_ref = {"weight_decay": 0.0001, "output_bn_freeze_bias": False, "detach_margin_norm": False}
+        expected_ctrl = {"weight_decay": 0.0, "output_bn_freeze_bias": True, "detach_margin_norm": True}
+        if (ft_control.get("changed_parameter") != "training.weight_decay+output_bn_freeze_bias+heads.magface.detach_margin_norm"
+                or ft_control.get("reference_value") != expected_ref
+                or ft_control.get("control_value") != expected_ctrl
+                or float(training_wd) != 0.0):
+            raise ValueError("MagFace detach_margin_norm control requires schema=facex-finetune-detach-margin-control-v1 and training.weight_decay=0.0")
+        if training_cfg is not None and (
+                training_cfg.get("output_bn_freeze_bias") is not True
+                or training_cfg.get("output_bn_weight_decay") is not None):
+            raise ValueError("finetune_detach_margin_control requires output_bn_freeze_bias=True and output_bn_weight_decay=None")
+        if head_cfg is not None and head_cfg.get("detach_margin_norm") is not True:
+            raise ValueError("finetune_detach_margin_control requires heads.magface.detach_margin_norm=True")
+    elif schema == FINETUNE_DETACH_MARGIN_LR_0002_SCHEMA:
+        expected_ref = {"lr": 0.001, "weight_decay": 0.0001, "output_bn_freeze_bias": False, "detach_margin_norm": False}
+        expected_ctrl = {"lr": 0.0002, "weight_decay": 0.0, "output_bn_freeze_bias": True, "detach_margin_norm": True}
+        if (ft_control.get("changed_parameter") != "training.lr+weight_decay+output_bn_freeze_bias+heads.magface.detach_margin_norm"
+                or ft_control.get("reference_value") != expected_ref
+                or ft_control.get("control_value") != expected_ctrl
+                or float(training_wd) != 0.0):
+            raise ValueError("MagFace detach_margin_norm lr=0.0002 control requires schema=facex-finetune-detach-margin-lr-0002-control-v1 and training.weight_decay=0.0")
+        if training_cfg is not None:
+            lr_val = training_cfg.get("lr")
+            if (isinstance(lr_val, bool) or type(lr_val) not in (int, float)
+                    or float(lr_val) != 0.0002
+                    or training_cfg.get("output_bn_freeze_bias") is not True
+                    or training_cfg.get("output_bn_weight_decay") is not None):
+                raise ValueError("finetune_detach_margin_lr_0002_control requires training.lr=0.0002, output_bn_freeze_bias=True, and output_bn_weight_decay=None")
+        if head_cfg is not None and head_cfg.get("detach_margin_norm") is not True:
+            raise ValueError("finetune_detach_margin_lr_0002_control requires heads.magface.detach_margin_norm=True")
+    else:
+        raise ValueError(f"Unsupported finetune_control schema: {schema!r}")
+    if schema in (
+        FINETUNE_WD_ZERO_SCHEMA,
+        FINETUNE_OUTPUT_BN_SCHEMA,
+        FINETUNE_WD_ZERO_FREEZE_BIAS_SCHEMA,
+        FINETUNE_DETACH_MARGIN_SCHEMA,
+    ) and training_cfg is not None and "lr" in training_cfg:
+        lr_val = training_cfg["lr"]
+        if isinstance(lr_val, bool) or type(lr_val) not in (int, float) or float(lr_val) != 0.001:
+            raise ValueError(f"{schema} must retain baseline training.lr=0.001")
     if not isinstance(parent_binding, dict) or ft_control.get("parent_sha256") != parent_binding.get("sha256"):
         raise ValueError("Fine-tune control parent_sha256 must match parent_binding.sha256")
     for key in ("parent_sha256", "reference_selection_sha256", "reference_sha256"):
@@ -293,9 +379,37 @@ def validate_finetune_control_spec(ft_control, parent_binding, training_wd, *, r
     if rows is not None:
         if not isinstance(rows, list) or len(rows) != 1 or rows[0] != FINETUNE_WD_ZERO_EXPECTED_ROW:
             raise ValueError(
-                "finetune_wd_zero_control requires exactly one target row: "
+                f"{schema} requires exactly one target row: "
                 "survface / full_fr_resize_only / magface / seed 8972"
             )
+
+
+def _check_expected_settings_diff(ref_settings, new_settings, ref_ckpt_config, new_expected_config, label):
+    """Compare full selection settings and extracted configs after normalizing caller-permitted training deltas."""
+    if new_settings.get("training", {}).get("save_freq") != 1 or new_settings.get("project", {}).get("keep_raw_results") is not True:
+        raise ValueError(f"{label} requires save_freq=1 and KEEP_RAW_RESULTS=True")
+    ref_settings["training"]["save_freq"] = 1
+    ref_settings["project"]["keep_raw_results"] = True
+    for item in (ref_settings, new_settings):
+        item.pop("paths", None)
+        item.pop("selection_provenance", None)
+        item.pop("runtime", None)
+        item.pop("data_integrity", None)
+        if isinstance(item.get("campaign"), dict):
+            item["campaign"].pop("finetune_control", None)
+    if ref_settings != new_settings:
+        diff_keys = sorted(k for k in set(ref_settings) | set(new_settings) if ref_settings.get(k) != new_settings.get(k))
+        raise ValueError(f"{label} settings differ beyond controlled factor: " + ", ".join(diff_keys))
+
+    if (ref_ckpt_config.get("code_fingerprints") != new_expected_config.get("code_fingerprints")
+            and not w.source_transition(ref_ckpt_config.get("code_fingerprints"), new_expected_config.get("code_fingerprints"))):
+        raise ValueError(f"Unreviewed downstream source transition in {label}")
+    for item in (ref_ckpt_config, new_expected_config):
+        item.pop("config_hash", None)
+        item.pop("code_fingerprints", None)
+    if ref_ckpt_config != new_expected_config:
+        diff_keys = sorted(k for k in set(ref_ckpt_config) | set(new_expected_config) if ref_ckpt_config.get(k) != new_expected_config.get(k))
+        raise ValueError(f"{label} extracted config differs beyond controlled factor: " + ", ".join(diff_keys))
 
 
 def require_only_finetune_wd_zero(ref_settings, new_settings, ref_ckpt_config, new_expected_config):
@@ -303,62 +417,247 @@ def require_only_finetune_wd_zero(ref_settings, new_settings, ref_ckpt_config, n
     old_s, new_s = copy.deepcopy(ref_settings), copy.deepcopy(new_settings)
     if old_s.get("training", {}).get("weight_decay") != 0.0001 or new_s.get("training", {}).get("weight_decay") != 0.0:
         raise ValueError("Fine-tune control must change training.weight_decay 0.0001 -> 0.0")
-    if new_s.get("training", {}).get("save_freq") != 1 or new_s.get("project", {}).get("keep_raw_results") is not True:
-        raise ValueError("finetune_wd_zero_control requires save_freq=1 and KEEP_RAW_RESULTS=True")
     old_s["training"]["weight_decay"] = 0.0
-    old_s["training"]["save_freq"] = 1
-    old_s["project"]["keep_raw_results"] = True
-    for item in (old_s, new_s):
-        item.pop("paths", None)
-        item.pop("selection_provenance", None)
-        item.pop("runtime", None)
-        item.pop("data_integrity", None)
-        if isinstance(item.get("campaign"), dict):
-            item["campaign"].pop("finetune_control", None)
-    if old_s != new_s:
-        diff_keys = sorted(k for k in set(old_s) | set(new_s) if old_s.get(k) != new_s.get(k))
-        raise ValueError("Fine-tune WD=0 control settings differ beyond training.weight_decay: " + ", ".join(diff_keys))
-
     old_c, new_c = copy.deepcopy(ref_ckpt_config), copy.deepcopy(new_expected_config)
     if old_c.get("training", {}).get("weight_decay") != 0.0001 or new_c.get("training", {}).get("weight_decay") != 0.0:
         raise ValueError("Fine-tune control extracted config must change training.weight_decay 0.0001 -> 0.0")
-    if (old_c.get("code_fingerprints") != new_c.get("code_fingerprints")
-            and not w.source_transition(old_c.get("code_fingerprints"), new_c.get("code_fingerprints"))):
-        raise ValueError("Unreviewed downstream source transition in fine-tune WD=0 control")
     old_c["training"]["weight_decay"] = 0.0
-    for item in (old_c, new_c):
-        item.pop("config_hash", None)
-        item.pop("code_fingerprints", None)
-    if old_c != new_c:
-        diff_keys = sorted(k for k in set(old_c) | set(new_c) if old_c.get(k) != new_c.get(k))
-        raise ValueError("Fine-tune WD=0 control extracted config differs beyond training.weight_decay: " + ", ".join(diff_keys))
+    _check_expected_settings_diff(old_s, new_s, old_c, new_c, "Fine-tune WD=0 control")
 
 
-def verify_finetune_wd_zero_settings(selection, row, cfg):
-    """Verify current fine-tune WD=0 settings against the pinned reference selection and checkpoint."""
+def require_only_finetune_output_bn_control(ref_settings, new_settings, ref_ckpt_config, new_expected_config):
+    """Zero-tolerance check: only output_bn_freeze_bias=True and output_bn_weight_decay=0.0 may differ."""
+    old_s, new_s = copy.deepcopy(ref_settings), copy.deepcopy(new_settings)
+    old_tr, new_tr = old_s.get("training", {}), new_s.get("training", {})
+    if (old_tr.get("weight_decay") != 0.0001
+            or old_tr.get("output_bn_freeze_bias")
+            or old_tr.get("output_bn_weight_decay") is not None):
+        raise ValueError("Reference settings must retain baseline weight_decay=0.0001 without output BN control")
+    if (new_tr.get("weight_decay") != 0.0001
+            or new_tr.get("output_bn_freeze_bias") is not True
+            or new_tr.get("output_bn_weight_decay") != 0.0):
+        raise ValueError("Output BN control must retain training.weight_decay=0.0001 and set output_bn_freeze_bias=True, output_bn_weight_decay=0.0")
+    old_tr["output_bn_freeze_bias"] = True
+    old_tr["output_bn_weight_decay"] = 0.0
+
+    old_c, new_c = copy.deepcopy(ref_ckpt_config), copy.deepcopy(new_expected_config)
+    oc_tr, nc_tr = old_c.get("training", {}), new_c.get("training", {})
+    if (oc_tr.get("weight_decay") != 0.0001
+            or "output_bn_freeze_bias" in oc_tr
+            or "output_bn_weight_decay" in oc_tr):
+        raise ValueError("Reference extracted config must retain weight_decay=0.0001 without output BN control")
+    if (nc_tr.get("weight_decay") != 0.0001
+            or nc_tr.get("output_bn_freeze_bias") is not True
+            or nc_tr.get("output_bn_weight_decay") != 0.0):
+        raise ValueError("Output BN control extracted config must set output_bn_freeze_bias=True and output_bn_weight_decay=0.0")
+    oc_tr["output_bn_freeze_bias"] = True
+    oc_tr["output_bn_weight_decay"] = 0.0
+    _check_expected_settings_diff(old_s, new_s, old_c, new_c, "Fine-tune output BN control")
+
+
+def require_only_finetune_wd_zero_freeze_bias_control(ref_settings, new_settings, ref_ckpt_config, new_expected_config):
+    """Zero-tolerance check: only weight_decay (0.0001 -> 0.0) and output_bn_freeze_bias=True may differ."""
+    old_s, new_s = copy.deepcopy(ref_settings), copy.deepcopy(new_settings)
+    old_tr, new_tr = old_s.get("training", {}), new_s.get("training", {})
+    if (old_tr.get("weight_decay") != 0.0001
+            or old_tr.get("output_bn_freeze_bias")
+            or old_tr.get("output_bn_weight_decay") is not None):
+        raise ValueError("Reference settings must retain baseline weight_decay=0.0001 without output BN control")
+    if (new_tr.get("weight_decay") != 0.0
+            or new_tr.get("output_bn_freeze_bias") is not True
+            or new_tr.get("output_bn_weight_decay") is not None):
+        raise ValueError("WD=0 + frozen output BN bias control requires training.weight_decay=0.0, output_bn_freeze_bias=True, and output_bn_weight_decay=None")
+    old_tr["weight_decay"] = 0.0
+    old_tr["output_bn_freeze_bias"] = True
+
+    old_c, new_c = copy.deepcopy(ref_ckpt_config), copy.deepcopy(new_expected_config)
+    oc_tr, nc_tr = old_c.get("training", {}), new_c.get("training", {})
+    if (oc_tr.get("weight_decay") != 0.0001
+            or "output_bn_freeze_bias" in oc_tr
+            or "output_bn_weight_decay" in oc_tr):
+        raise ValueError("Reference extracted config must retain weight_decay=0.0001 without output BN control")
+    if (nc_tr.get("weight_decay") != 0.0
+            or nc_tr.get("output_bn_freeze_bias") is not True
+            or "output_bn_weight_decay" in nc_tr):
+        raise ValueError("WD=0 + frozen output BN bias extracted config must set weight_decay=0.0 and output_bn_freeze_bias=True only")
+    oc_tr["weight_decay"] = 0.0
+    oc_tr["output_bn_freeze_bias"] = True
+    _check_expected_settings_diff(old_s, new_s, old_c, new_c, "Fine-tune WD=0 + frozen output BN bias control")
+
+
+def require_only_finetune_detach_margin_control(ref_settings, new_settings, ref_ckpt_config, new_expected_config):
+    """Zero-tolerance check: only weight_decay=0.0, output_bn_freeze_bias=True, and heads.magface.detach_margin_norm=True may differ."""
+    old_s, new_s = copy.deepcopy(ref_settings), copy.deepcopy(new_settings)
+    old_tr, new_tr = old_s.get("training", {}), new_s.get("training", {})
+    old_hd_s = old_s.get("heads", {}).get("magface", {})
+    new_hd_s = new_s.get("heads", {}).get("magface", {})
+    if (old_tr.get("weight_decay") != 0.0001
+            or old_tr.get("output_bn_freeze_bias")
+            or old_tr.get("output_bn_weight_decay") is not None
+            or old_hd_s.get("detach_margin_norm")):
+        raise ValueError("Reference settings must retain baseline weight_decay=0.0001 without output BN or detach_margin_norm controls")
+    if (new_tr.get("weight_decay") != 0.0
+            or new_tr.get("output_bn_freeze_bias") is not True
+            or new_tr.get("output_bn_weight_decay") is not None
+            or new_hd_s.get("detach_margin_norm") is not True):
+        raise ValueError("MagFace detach_margin_norm control requires weight_decay=0.0, output_bn_freeze_bias=True, output_bn_weight_decay=None, and detach_margin_norm=True")
+    old_tr["weight_decay"] = 0.0
+    old_tr["output_bn_freeze_bias"] = True
+    old_hd_s["detach_margin_norm"] = True
+
+    old_c, new_c = copy.deepcopy(ref_ckpt_config), copy.deepcopy(new_expected_config)
+    oc_tr, nc_tr = old_c.get("training", {}), new_c.get("training", {})
+    oc_hd, nc_hd = old_c.get("head", {}), new_c.get("head", {})
+    if (oc_tr.get("weight_decay") != 0.0001
+            or "output_bn_freeze_bias" in oc_tr
+            or "output_bn_weight_decay" in oc_tr
+            or "detach_margin_norm" in oc_hd):
+        raise ValueError("Reference extracted config must retain weight_decay=0.0001 without output BN or detach_margin_norm controls")
+    if (nc_tr.get("weight_decay") != 0.0
+            or nc_tr.get("output_bn_freeze_bias") is not True
+            or "output_bn_weight_decay" in nc_tr
+            or nc_hd.get("detach_margin_norm") is not True):
+        raise ValueError("MagFace detach_margin_norm extracted config must set weight_decay=0.0, output_bn_freeze_bias=True, and detach_margin_norm=True")
+    oc_tr["weight_decay"] = 0.0
+    oc_tr["output_bn_freeze_bias"] = True
+    oc_hd["detach_margin_norm"] = True
+    _check_expected_settings_diff(old_s, new_s, old_c, new_c, "Fine-tune detach_margin_norm control")
+
+
+def require_only_finetune_detach_margin_lr_0002_control(ref_settings, new_settings, ref_ckpt_config, new_expected_config):
+    """Zero-tolerance check: only lr=0.0002, weight_decay=0.0, output_bn_freeze_bias=True, and detach_margin_norm=True may differ."""
+    old_s, new_s = copy.deepcopy(ref_settings), copy.deepcopy(new_settings)
+    old_tr, new_tr = old_s.get("training", {}), new_s.get("training", {})
+    old_hd_s = old_s.get("heads", {}).get("magface", {})
+    new_hd_s = new_s.get("heads", {}).get("magface", {})
+    if (old_tr.get("lr") != 0.001
+            or old_tr.get("weight_decay") != 0.0001
+            or old_tr.get("output_bn_freeze_bias")
+            or old_tr.get("output_bn_weight_decay") is not None
+            or old_hd_s.get("detach_margin_norm")):
+        raise ValueError("Reference settings must retain baseline lr=0.001 and weight_decay=0.0001 without output BN or detach_margin_norm controls")
+    if (new_tr.get("lr") != 0.0002
+            or new_tr.get("weight_decay") != 0.0
+            or new_tr.get("output_bn_freeze_bias") is not True
+            or new_tr.get("output_bn_weight_decay") is not None
+            or new_hd_s.get("detach_margin_norm") is not True):
+        raise ValueError("MagFace detach_margin_norm lr=0.0002 control requires lr=0.0002, weight_decay=0.0, output_bn_freeze_bias=True, output_bn_weight_decay=None, and detach_margin_norm=True")
+    old_tr["lr"] = 0.0002
+    old_tr["weight_decay"] = 0.0
+    old_tr["output_bn_freeze_bias"] = True
+    old_hd_s["detach_margin_norm"] = True
+
+    old_c, new_c = copy.deepcopy(ref_ckpt_config), copy.deepcopy(new_expected_config)
+    oc_tr, nc_tr = old_c.get("training", {}), new_c.get("training", {})
+    oc_hd, nc_hd = old_c.get("head", {}), new_c.get("head", {})
+    if (oc_tr.get("lr") != 0.001
+            or oc_tr.get("weight_decay") != 0.0001
+            or "output_bn_freeze_bias" in oc_tr
+            or "output_bn_weight_decay" in oc_tr
+            or "detach_margin_norm" in oc_hd):
+        raise ValueError("Reference extracted config must retain lr=0.001 and weight_decay=0.0001 without output BN or detach_margin_norm controls")
+    if (nc_tr.get("lr") != 0.0002
+            or nc_tr.get("weight_decay") != 0.0
+            or nc_tr.get("output_bn_freeze_bias") is not True
+            or "output_bn_weight_decay" in nc_tr
+            or nc_hd.get("detach_margin_norm") is not True):
+        raise ValueError("MagFace detach_margin_norm lr=0.0002 extracted config must set lr=0.0002, weight_decay=0.0, output_bn_freeze_bias=True, and detach_margin_norm=True")
+    oc_tr["lr"] = 0.0002
+    oc_tr["weight_decay"] = 0.0
+    oc_tr["output_bn_freeze_bias"] = True
+    oc_hd["detach_margin_norm"] = True
+    _check_expected_settings_diff(old_s, new_s, old_c, new_c, "Fine-tune detach_margin_norm lr=0.0002 control")
+
+
+def verify_finetune_control_settings(selection, row, cfg):
+    """Verify current fine-tune diagnostic control settings against the pinned reference selection and checkpoint."""
     from .selected_campaign import _expected, load_selection, settings_for
     from .ucface_controls import check_file
     ft_control = cfg.get("campaign", {}).get("finetune_control")
-    validate_finetune_control_spec(ft_control, cfg.get("campaign", {}).get("parent_binding"), cfg.get("training", {}).get("weight_decay"))
+    validate_finetune_control_spec(
+        ft_control,
+        cfg.get("campaign", {}).get("parent_binding"),
+        cfg.get("training", {}).get("weight_decay"),
+        training_cfg=cfg.get("training"),
+        head_cfg=cfg.get("heads", {}).get("magface"),
+    )
     check_file(ft_control["reference_selection"], ft_control["reference_selection_sha256"])
     check_file(ft_control["reference_checkpoint"], ft_control["reference_sha256"])
     ref_selection = load_selection(ft_control["reference_selection"])
     if len(ref_selection["rows"]) != 1 or ref_selection["rows"][0] != row:
-        raise ValueError("Fine-tune WD=0 control row differs from the pinned reference selection")
+        raise ValueError("Fine-tune control row differs from the pinned reference selection")
     ref_cfg = settings_for(ref_selection, ref_selection["rows"][0])
     ref_payload = load_checkpoint(ft_control["reference_checkpoint"])
-    require_only_finetune_wd_zero(ref_cfg, cfg, ref_payload["config"], _expected(cfg, row))
+    if ft_control["schema"] == FINETUNE_OUTPUT_BN_SCHEMA:
+        require_only_finetune_output_bn_control(ref_cfg, cfg, ref_payload["config"], _expected(cfg, row))
+    elif ft_control["schema"] == FINETUNE_WD_ZERO_FREEZE_BIAS_SCHEMA:
+        require_only_finetune_wd_zero_freeze_bias_control(ref_cfg, cfg, ref_payload["config"], _expected(cfg, row))
+    elif ft_control["schema"] == FINETUNE_DETACH_MARGIN_SCHEMA:
+        require_only_finetune_detach_margin_control(ref_cfg, cfg, ref_payload["config"], _expected(cfg, row))
+    elif ft_control["schema"] == FINETUNE_DETACH_MARGIN_LR_0002_SCHEMA:
+        require_only_finetune_detach_margin_lr_0002_control(ref_cfg, cfg, ref_payload["config"], _expected(cfg, row))
+    else:
+        require_only_finetune_wd_zero(ref_cfg, cfg, ref_payload["config"], _expected(cfg, row))
+
+
+verify_finetune_wd_zero_settings = verify_finetune_control_settings
+
+
+def _check_common_finetune_control_payload(
+    payload, path, cfg, expected, label, *, check_wd_zero_dir=False, check_output_bn_dir=False,
+    check_freeze_bias_dir=False, check_detach_margin_dir=False
+):
+    from .checkpoint_manager import compute_config_hash
+    ft_control = cfg.get("campaign", {}).get("finetune_control")
+    validate_finetune_control_spec(
+        ft_control,
+        cfg.get("campaign", {}).get("parent_binding"),
+        cfg.get("training", {}).get("weight_decay"),
+        training_cfg=cfg.get("training"),
+        head_cfg=cfg.get("heads", {}).get("magface"),
+    )
+    resolved_path = Path(path).resolve()
+    ref_dir = Path(ft_control["reference_checkpoint"]).resolve().parent
+    if resolved_path == ref_dir or resolved_path.is_relative_to(ref_dir):
+        raise ValueError(f"Reference ft_wd=0.0001 checkpoint cannot be used as a {label} checkpoint")
+    diag_parent = Path(ft_control["reference_selection"]).resolve().parent.parent
+    if check_wd_zero_dir:
+        wd0_dir = (diag_parent / FINETUNE_WD_ZERO_SUBDIR).resolve()
+        if resolved_path == wd0_dir or resolved_path.is_relative_to(wd0_dir):
+            raise ValueError(f"Previous finetune_wd_zero_v1 checkpoint cannot be used as a {label} checkpoint")
+    if check_output_bn_dir:
+        obn_dir = (diag_parent / FINETUNE_OUTPUT_BN_SUBDIR).resolve()
+        if resolved_path == obn_dir or resolved_path.is_relative_to(obn_dir):
+            raise ValueError(f"Previous finetune_output_bn_v1 checkpoint cannot be used as a {label} checkpoint")
+    if check_freeze_bias_dir:
+        fb_dir = (diag_parent / FINETUNE_WD_ZERO_FREEZE_BIAS_SUBDIR).resolve()
+        if resolved_path == fb_dir or resolved_path.is_relative_to(fb_dir):
+            raise ValueError(f"Previous finetune_wd_zero_freeze_bias_v1 checkpoint cannot be used as a {label} checkpoint")
+    if check_detach_margin_dir:
+        dm_dir = (diag_parent / FINETUNE_DETACH_MARGIN_SUBDIR).resolve()
+        if resolved_path == dm_dir or resolved_path.is_relative_to(dm_dir):
+            raise ValueError(f"Previous finetune_detach_margin_v1 checkpoint cannot be used as a {label} checkpoint")
+    ckpt_cfg = payload.get("config", {})
+    if (ckpt_cfg.get("code_fingerprints") != expected.get("code_fingerprints")
+            and not w.source_transition(ckpt_cfg.get("code_fingerprints"), expected.get("code_fingerprints"))):
+        raise ValueError(f"Unreviewed source transition in {label} checkpoint")
+    ckpt_clean, exp_clean = copy.deepcopy(ckpt_cfg), copy.deepcopy(expected)
+    for item in (ckpt_clean, exp_clean):
+        item.pop("config_hash", None)
+        item.pop("code_fingerprints", None)
+    if ckpt_clean != exp_clean:
+        raise ValueError(f"{label} checkpoint config differs from exact expected configuration")
+    meta = payload.get("extra_meta", payload.get("metadata", {}))
+    exec_settings = meta.get("execution_settings") if isinstance(meta, dict) else None
+    if not isinstance(exec_settings, dict) or exec_settings.get("campaign", {}).get("finetune_control") != ft_control:
+        raise ValueError(f"{label} checkpoint lacks matching finetune_control provenance")
+    if compute_config_hash(ckpt_cfg) != payload.get("config_hash"):
+        raise ValueError("Checkpoint config_hash mismatch")
+    return ckpt_cfg
 
 
 def verify_finetune_wd_zero_checkpoint_payload(payload, path, cfg, expected, *, completed=True):
     """Reject any checkpoint with non-zero weight_decay, wrong optimizer param_groups, or reference provenance."""
-    from .checkpoint_manager import compute_config_hash
-    ft_control = cfg.get("campaign", {}).get("finetune_control")
-    validate_finetune_control_spec(ft_control, cfg.get("campaign", {}).get("parent_binding"), cfg.get("training", {}).get("weight_decay"))
-    resolved_path = Path(path).resolve()
-    ref_dir = Path(ft_control["reference_checkpoint"]).resolve().parent
-    if resolved_path == ref_dir or resolved_path.is_relative_to(ref_dir):
-        raise ValueError("Reference ft_wd=0.0001 checkpoint cannot be used as a finetune_wd_zero_control checkpoint")
     ckpt_cfg = payload.get("config", {})
     if ckpt_cfg.get("training", {}).get("weight_decay") != 0.0:
         raise ValueError(f"finetune_wd_zero_control requires checkpoint training.weight_decay=0.0, found {ckpt_cfg.get('training', {}).get('weight_decay')}")
@@ -366,47 +665,146 @@ def verify_finetune_wd_zero_checkpoint_payload(payload, path, cfg, expected, *, 
     if not isinstance(opt_groups, list) or not opt_groups or any(
             g.get("weight_decay") is None or float(g.get("weight_decay")) != 0.0 for g in opt_groups):
         raise ValueError("finetune_wd_zero_control requires optimizer_state_dict.param_groups weight_decay=0.0")
-    if (ckpt_cfg.get("code_fingerprints") != expected.get("code_fingerprints")
-            and not w.source_transition(ckpt_cfg.get("code_fingerprints"), expected.get("code_fingerprints"))):
-        raise ValueError("Unreviewed source transition in finetune_wd_zero_control checkpoint")
-    ckpt_clean, exp_clean = copy.deepcopy(ckpt_cfg), copy.deepcopy(expected)
-    for item in (ckpt_clean, exp_clean):
-        item.pop("config_hash", None)
-        item.pop("code_fingerprints", None)
-    if ckpt_clean != exp_clean:
-        raise ValueError("finetune_wd_zero_control checkpoint config differs from exact expected configuration")
-    meta = payload.get("extra_meta", payload.get("metadata", {}))
-    exec_settings = meta.get("execution_settings") if isinstance(meta, dict) else None
-    if not isinstance(exec_settings, dict) or exec_settings.get("campaign", {}).get("finetune_control") != ft_control:
-        raise ValueError("finetune_wd_zero_control checkpoint lacks matching finetune_control provenance")
-    if compute_config_hash(ckpt_cfg) != payload.get("config_hash"):
-        raise ValueError("Checkpoint config_hash mismatch")
+    _check_common_finetune_control_payload(payload, path, cfg, expected, "finetune_wd_zero_control")
 
 
-def build_finetune_wd_zero_selection(baseline, control_root=None, output_root=None):
-    """Reuse completed WD=0 Parent and change only SurvFace MagFace fine-tune weight_decay 0.0001 -> 0.0."""
-    from .selected_campaign import (
-        _expected,
-        _validate,
-        final_path,
-        load_selection,
-        make_selection,
-        settings_for,
+def verify_finetune_output_bn_checkpoint_payload(payload, path, cfg, expected, *, completed=True):
+    """Enforce frozen zero bn.bias, split [0.0001, 0.0] optimizer param_groups, and exact provenance."""
+    ckpt_tr = payload.get("config", {}).get("training", {})
+    if (ckpt_tr.get("weight_decay") != 0.0001
+            or ckpt_tr.get("output_bn_freeze_bias") is not True
+            or ckpt_tr.get("output_bn_weight_decay") != 0.0):
+        raise ValueError("finetune_output_bn_control requires training.weight_decay=0.0001, output_bn_freeze_bias=True, and output_bn_weight_decay=0.0")
+    opt_groups = payload.get("optimizer_state_dict", {}).get("param_groups", [])
+    if (not isinstance(opt_groups, list) or len(opt_groups) != 2
+            or opt_groups[0].get("name") != "default"
+            or float(opt_groups[0].get("weight_decay", -1)) != 0.0001
+            or opt_groups[1].get("name") != "output_bn_weight"
+            or float(opt_groups[1].get("weight_decay", -1)) != 0.0
+            or len(opt_groups[1].get("params", [])) != 1):
+        raise ValueError("finetune_output_bn_control requires two optimizer param_groups: default(wd=0.0001) and single-param output_bn_weight(wd=0.0)")
+    bn_bias = payload.get("backbone_state_dict", {}).get("bn.bias")
+    if bn_bias is None or torch.count_nonzero(bn_bias).item() != 0:
+        raise ValueError("finetune_output_bn_control checkpoint must retain backbone_state_dict['bn.bias'] frozen at exact zero")
+    _check_common_finetune_control_payload(payload, path, cfg, expected, "finetune_output_bn_control", check_wd_zero_dir=True)
+
+
+def verify_finetune_wd_zero_freeze_bias_checkpoint_payload(payload, path, cfg, expected, *, completed=True):
+    """Enforce training.weight_decay=0.0, frozen zero bn.bias, single param_group wd=0.0, and clean provenance."""
+    ckpt_tr = payload.get("config", {}).get("training", {})
+    if (ckpt_tr.get("weight_decay") != 0.0
+            or ckpt_tr.get("output_bn_freeze_bias") is not True
+            or "output_bn_weight_decay" in ckpt_tr):
+        raise ValueError("finetune_wd_zero_freeze_bias_control requires training.weight_decay=0.0, output_bn_freeze_bias=True, and no output_bn_weight_decay")
+    opt_groups = payload.get("optimizer_state_dict", {}).get("param_groups", [])
+    if (not isinstance(opt_groups, list) or len(opt_groups) != 1
+            or opt_groups[0].get("weight_decay") is None
+            or float(opt_groups[0]["weight_decay"]) != 0.0):
+        raise ValueError("finetune_wd_zero_freeze_bias_control requires single optimizer param_group with weight_decay=0.0")
+    bn_bias = payload.get("backbone_state_dict", {}).get("bn.bias")
+    if bn_bias is None or torch.count_nonzero(bn_bias).item() != 0:
+        raise ValueError("finetune_wd_zero_freeze_bias_control checkpoint must retain backbone_state_dict['bn.bias'] frozen at exact zero")
+    _check_common_finetune_control_payload(
+        payload, path, cfg, expected, "finetune_wd_zero_freeze_bias_control", check_wd_zero_dir=True, check_output_bn_dir=True
     )
-    from .ucface_controls import ALIGNMENT_CONTROL
+
+
+def verify_finetune_detach_margin_checkpoint_payload(payload, path, cfg, expected, *, completed=True):
+    """Enforce weight_decay=0.0, frozen zero bn.bias, detach_margin_norm=True, single wd=0.0 group, and clean provenance."""
+    ckpt_cfg = payload.get("config", {})
+    ckpt_tr = ckpt_cfg.get("training", {})
+    ckpt_hd = ckpt_cfg.get("head", {})
+    if (ckpt_tr.get("weight_decay") != 0.0
+            or ckpt_tr.get("output_bn_freeze_bias") is not True
+            or "output_bn_weight_decay" in ckpt_tr
+            or ckpt_hd.get("detach_margin_norm") is not True):
+        raise ValueError(
+            "finetune_detach_margin_control requires training.weight_decay=0.0, output_bn_freeze_bias=True, no output_bn_weight_decay, and head.detach_margin_norm=True"
+        )
+    opt_groups = payload.get("optimizer_state_dict", {}).get("param_groups", [])
+    if (not isinstance(opt_groups, list) or len(opt_groups) != 1
+            or opt_groups[0].get("weight_decay") is None
+            or float(opt_groups[0]["weight_decay"]) != 0.0):
+        raise ValueError("finetune_detach_margin_control requires single optimizer param_group with weight_decay=0.0")
+    bn_bias = payload.get("backbone_state_dict", {}).get("bn.bias")
+    if bn_bias is None or torch.count_nonzero(bn_bias).item() != 0:
+        raise ValueError("finetune_detach_margin_control checkpoint must retain backbone_state_dict['bn.bias'] frozen at exact zero")
+    _check_common_finetune_control_payload(
+        payload,
+        path,
+        cfg,
+        expected,
+        "finetune_detach_margin_control",
+        check_wd_zero_dir=True,
+        check_output_bn_dir=True,
+        check_freeze_bias_dir=True,
+    )
+
+
+def verify_finetune_detach_margin_lr_0002_checkpoint_payload(payload, path, cfg, expected, *, completed=True):
+    """Enforce lr=0.0002, wd=0.0, frozen zero bn.bias, detach_margin_norm=True, single wd=0.0 group, and clean provenance."""
+    ckpt_cfg = payload.get("config", {})
+    ckpt_tr = ckpt_cfg.get("training", {})
+    ckpt_hd = ckpt_cfg.get("head", {})
+    ckpt_lr = ckpt_tr.get("lr")
+    if (isinstance(ckpt_lr, bool) or type(ckpt_lr) not in (int, float)
+            or float(ckpt_lr) != 0.0002
+            or ckpt_tr.get("weight_decay") != 0.0
+            or ckpt_tr.get("output_bn_freeze_bias") is not True
+            or "output_bn_weight_decay" in ckpt_tr
+            or ckpt_hd.get("detach_margin_norm") is not True):
+        raise ValueError(
+            "finetune_detach_margin_lr_0002_control requires training.lr=0.0002, training.weight_decay=0.0, output_bn_freeze_bias=True, no output_bn_weight_decay, and head.detach_margin_norm=True"
+        )
+    opt_groups = payload.get("optimizer_state_dict", {}).get("param_groups", [])
+    if (not isinstance(opt_groups, list) or len(opt_groups) != 1
+            or opt_groups[0].get("weight_decay") is None
+            or float(opt_groups[0]["weight_decay"]) != 0.0):
+        raise ValueError("finetune_detach_margin_lr_0002_control requires single optimizer param_group with weight_decay=0.0")
+    init_lr = opt_groups[0].get("initial_lr", opt_groups[0].get("lr"))
+    if init_lr is None or abs(float(init_lr) - 0.0002) > 1e-12:
+        raise ValueError("finetune_detach_margin_lr_0002_control optimizer param_group initial_lr/lr must equal 0.0002")
+    bn_bias = payload.get("backbone_state_dict", {}).get("bn.bias")
+    if bn_bias is None or torch.count_nonzero(bn_bias).item() != 0:
+        raise ValueError("finetune_detach_margin_lr_0002_control checkpoint must retain backbone_state_dict['bn.bias'] frozen at exact zero")
+    _check_common_finetune_control_payload(
+        payload,
+        path,
+        cfg,
+        expected,
+        "finetune_detach_margin_lr_0002_control",
+        check_wd_zero_dir=True,
+        check_output_bn_dir=True,
+        check_freeze_bias_dir=True,
+        check_detach_margin_dir=True,
+    )
+
+
+def _prepare_single_row_control_base(baseline, control_root, output_root, default_subdir, label):
+    from .selected_campaign import _validate, final_path, load_selection, settings_for
 
     model_root = Path(baseline.get("storage", {}).get("model_root", "F:/models"))
     root = (Path(control_root) if control_root is not None else model_root / "facex/diagnostics/parent_weight_decay_zero_v1").resolve()
-    out_root = (Path(output_root) if output_root is not None else root / FINETUNE_WD_ZERO_SUBDIR).resolve()
-    for protected in (root / "checkpoint", root / "followup", root / "followup_execution"):
+    out_root = (Path(output_root) if output_root is not None else root / default_subdir).resolve()
+    protected_dirs = [root / "checkpoint", root / "followup", root / "followup_execution"]
+    for prior_subdir in (
+        FINETUNE_WD_ZERO_SUBDIR,
+        FINETUNE_OUTPUT_BN_SUBDIR,
+        FINETUNE_WD_ZERO_FREEZE_BIAS_SUBDIR,
+        FINETUNE_DETACH_MARGIN_SUBDIR,
+        FINETUNE_DETACH_MARGIN_LR_0002_SUBDIR,
+    ):
+        if default_subdir != prior_subdir:
+            protected_dirs.append(root / prior_subdir)
+    for protected in protected_dirs:
         prot = protected.resolve()
         if out_root == prot or out_root.is_relative_to(prot) or prot.is_relative_to(out_root):
-            raise ValueError("Fine-tune WD=0 control output must be separate from completed parent and followup artifacts")
+            raise ValueError(f"{label} output must be separate from completed parent, followup, and prior diagnostic artifacts")
     ref_selection_path = root / "followup/selection.json"
     if not ref_selection_path.is_file():
         raise FileNotFoundError(f"Completed WD=0 Parent followup selection is required: {ref_selection_path}")
     if baseline.get("project", {}).get("keep_raw_results") is not True:
-        raise ValueError("finetune_wd_zero_control requires KEEP_RAW_RESULTS=True to preserve epoch 1, 2, 5, 10, 40 checkpoints")
+        raise ValueError(f"{label} requires KEEP_RAW_RESULTS=True to preserve epoch 1, 2, 5, 10, 40 checkpoints")
     ref_selection_sha = compute_sha256(str(ref_selection_path))
     ref_selection = load_selection(ref_selection_path)
     if len(ref_selection["rows"]) != 1 or ref_selection["rows"][0]["run_id"] != FINETUNE_WD_ZERO_RUN_ID:
@@ -422,7 +820,17 @@ def build_finetune_wd_zero_selection(baseline, control_root=None, output_root=No
     ref_sha = (json.loads(ref_hash_file.read_text(encoding="utf-8"))["sha256"]
                if ref_hash_file.is_file() else compute_sha256(str(ref_ckpt)))
     ref_payload = _validate(ref_ckpt, ref_cfg, ref_row, digest=ref_sha)
+    return model_root, out_root, ref_selection_path, ref_selection_sha, binding, ref_cfg, ref_ckpt, ref_sha, ref_payload
 
+
+def build_finetune_wd_zero_selection(baseline, control_root=None, output_root=None):
+    """Reuse completed WD=0 Parent and change only SurvFace MagFace fine-tune weight_decay 0.0001 -> 0.0."""
+    from .selected_campaign import _expected, make_selection, settings_for
+    from .ucface_controls import ALIGNMENT_CONTROL
+
+    model_root, out_root, ref_selection_path, ref_selection_sha, binding, ref_cfg, ref_ckpt, ref_sha, ref_payload = (
+        _prepare_single_row_control_base(baseline, control_root, output_root, FINETUNE_WD_ZERO_SUBDIR, "finetune_wd_zero_control")
+    )
     cfg = copy.deepcopy(baseline)
     cfg["project"]["keep_raw_results"] = True
     cfg["training"]["weight_decay"] = 0.0
@@ -469,8 +877,244 @@ def make_finetune_wd_zero_selection(baseline, control_root=None, output_root=Non
     return path
 
 
+def build_finetune_output_bn_selection(baseline, control_root=None, output_root=None):
+    """Reuse completed WD=0 Parent; freeze output bn.bias at 0 and split bn.weight decay=0.0 while keeping wd=0.0001."""
+    from .selected_campaign import _expected, make_selection, settings_for
+    from .ucface_controls import ALIGNMENT_CONTROL
+
+    model_root, out_root, ref_selection_path, ref_selection_sha, binding, ref_cfg, ref_ckpt, ref_sha, ref_payload = (
+        _prepare_single_row_control_base(baseline, control_root, output_root, FINETUNE_OUTPUT_BN_SUBDIR, "finetune_output_bn_control")
+    )
+    cfg = copy.deepcopy(baseline)
+    cfg["project"]["keep_raw_results"] = True
+    cfg["training"]["weight_decay"] = 0.0001
+    cfg["training"]["output_bn_freeze_bias"] = True
+    cfg["training"]["output_bn_weight_decay"] = 0.0
+    cfg["training"]["save_freq"] = 1
+    ft_control = dict(
+        schema=FINETUNE_OUTPUT_BN_SCHEMA,
+        purpose="diagnostic_control",
+        changed_parameter="training.output_bn_freeze_bias+output_bn_weight_decay",
+        reference_value={"weight_decay": 0.0001, "output_bn_freeze_bias": False, "output_bn_weight_decay": None},
+        control_value={"weight_decay": 0.0001, "output_bn_freeze_bias": True, "output_bn_weight_decay": 0.0},
+        parent_sha256=binding["sha256"],
+        reference_selection=str(ref_selection_path.resolve()),
+        reference_selection_sha256=ref_selection_sha,
+        reference_checkpoint=str(ref_ckpt.resolve()),
+        reference_sha256=ref_sha,
+        reference_model_uid="magface-ad3b19a576ec14a0883c",
+        reference_report="F:/ronbun_results/facex_workflow/reports/facex-1587c845c7c2c5f137132e9c",
+    )
+    cfg["campaign"].update(
+        parent_checkpoint=binding["path"],
+        parent_sha256=binding["sha256"],
+        parent_binding=binding,
+        finetune_control=ft_control,
+        purpose="diagnostic_control",
+    )
+    selection = make_selection(
+        cfg,
+        [dict(dataset="survface", recipe="full_fr_resize_only", heads=["magface"], seeds=[8972])],
+        out_root,
+        model_root / "facex/diagnostics" / ALIGNMENT_CONTROL,
+        purpose="diagnostic_control",
+    )
+    new_cfg = settings_for(selection, selection["rows"][0])
+    require_only_finetune_output_bn_control(ref_cfg, new_cfg, ref_payload["config"], _expected(new_cfg, selection["rows"][0]))
+    return selection
+
+
+def make_finetune_output_bn_selection(baseline, control_root=None, output_root=None):
+    """Build and save the immutable selection.json for the finetune_output_bn_control campaign."""
+    from .selected_campaign import save_selection
+    selection = build_finetune_output_bn_selection(baseline, control_root=control_root, output_root=output_root)
+    path = Path(selection["root"]) / "selection.json"
+    save_selection(path, selection)
+    return path
+
+
+def build_finetune_wd_zero_freeze_bias_selection(baseline, control_root=None, output_root=None):
+    """Reuse completed WD=0 Parent; set fine-tune weight_decay=0.0 and freeze output bn.bias at exact zero."""
+    from .selected_campaign import _expected, make_selection, settings_for
+    from .ucface_controls import ALIGNMENT_CONTROL
+
+    model_root, out_root, ref_selection_path, ref_selection_sha, binding, ref_cfg, ref_ckpt, ref_sha, ref_payload = (
+        _prepare_single_row_control_base(
+            baseline, control_root, output_root, FINETUNE_WD_ZERO_FREEZE_BIAS_SUBDIR, "finetune_wd_zero_freeze_bias_control"
+        )
+    )
+    cfg = copy.deepcopy(baseline)
+    cfg["project"]["keep_raw_results"] = True
+    cfg["training"]["weight_decay"] = 0.0
+    cfg["training"]["output_bn_freeze_bias"] = True
+    cfg["training"].pop("output_bn_weight_decay", None)
+    cfg["training"]["save_freq"] = 1
+    ft_control = dict(
+        schema=FINETUNE_WD_ZERO_FREEZE_BIAS_SCHEMA,
+        purpose="diagnostic_control",
+        changed_parameter="training.weight_decay+output_bn_freeze_bias",
+        reference_value={"weight_decay": 0.0001, "output_bn_freeze_bias": False},
+        control_value={"weight_decay": 0.0, "output_bn_freeze_bias": True},
+        parent_sha256=binding["sha256"],
+        reference_selection=str(ref_selection_path.resolve()),
+        reference_selection_sha256=ref_selection_sha,
+        reference_checkpoint=str(ref_ckpt.resolve()),
+        reference_sha256=ref_sha,
+        reference_model_uid="magface-ad3b19a576ec14a0883c",
+        reference_report="F:/ronbun_results/facex_workflow/reports/facex-1587c845c7c2c5f137132e9c",
+    )
+    cfg["campaign"].update(
+        parent_checkpoint=binding["path"],
+        parent_sha256=binding["sha256"],
+        parent_binding=binding,
+        finetune_control=ft_control,
+        purpose="diagnostic_control",
+    )
+    selection = make_selection(
+        cfg,
+        [dict(dataset="survface", recipe="full_fr_resize_only", heads=["magface"], seeds=[8972])],
+        out_root,
+        model_root / "facex/diagnostics" / ALIGNMENT_CONTROL,
+        purpose="diagnostic_control",
+    )
+    new_cfg = settings_for(selection, selection["rows"][0])
+    require_only_finetune_wd_zero_freeze_bias_control(ref_cfg, new_cfg, ref_payload["config"], _expected(new_cfg, selection["rows"][0]))
+    return selection
+
+
+def make_finetune_wd_zero_freeze_bias_selection(baseline, control_root=None, output_root=None):
+    """Build and save the immutable selection.json for the finetune_wd_zero_freeze_bias_control campaign."""
+    from .selected_campaign import save_selection
+    selection = build_finetune_wd_zero_freeze_bias_selection(baseline, control_root=control_root, output_root=output_root)
+    path = Path(selection["root"]) / "selection.json"
+    save_selection(path, selection)
+    return path
+
+
+def build_finetune_detach_margin_selection(baseline, control_root=None, output_root=None):
+    """Reuse completed WD=0 Parent; set wd=0.0, output_bn_freeze_bias=True, and heads.magface.detach_margin_norm=True."""
+    from .selected_campaign import _expected, make_selection, settings_for
+    from .ucface_controls import ALIGNMENT_CONTROL
+
+    model_root, out_root, ref_selection_path, ref_selection_sha, binding, ref_cfg, ref_ckpt, ref_sha, ref_payload = (
+        _prepare_single_row_control_base(
+            baseline, control_root, output_root, FINETUNE_DETACH_MARGIN_SUBDIR, "finetune_detach_margin_control"
+        )
+    )
+    cfg = copy.deepcopy(baseline)
+    cfg["project"]["keep_raw_results"] = True
+    cfg["training"]["weight_decay"] = 0.0
+    cfg["training"]["output_bn_freeze_bias"] = True
+    cfg["training"].pop("output_bn_weight_decay", None)
+    cfg["training"]["save_freq"] = 1
+    cfg["heads"]["magface"]["detach_margin_norm"] = True
+    ft_control = dict(
+        schema=FINETUNE_DETACH_MARGIN_SCHEMA,
+        purpose="diagnostic_control",
+        changed_parameter="training.weight_decay+output_bn_freeze_bias+heads.magface.detach_margin_norm",
+        reference_value={"weight_decay": 0.0001, "output_bn_freeze_bias": False, "detach_margin_norm": False},
+        control_value={"weight_decay": 0.0, "output_bn_freeze_bias": True, "detach_margin_norm": True},
+        parent_sha256=binding["sha256"],
+        reference_selection=str(ref_selection_path.resolve()),
+        reference_selection_sha256=ref_selection_sha,
+        reference_checkpoint=str(ref_ckpt.resolve()),
+        reference_sha256=ref_sha,
+        reference_model_uid="magface-ad3b19a576ec14a0883c",
+        reference_report="F:/ronbun_results/facex_workflow/reports/facex-1587c845c7c2c5f137132e9c",
+    )
+    cfg["campaign"].update(
+        parent_checkpoint=binding["path"],
+        parent_sha256=binding["sha256"],
+        parent_binding=binding,
+        finetune_control=ft_control,
+        purpose="diagnostic_control",
+    )
+    selection = make_selection(
+        cfg,
+        [dict(dataset="survface", recipe="full_fr_resize_only", heads=["magface"], seeds=[8972])],
+        out_root,
+        model_root / "facex/diagnostics" / ALIGNMENT_CONTROL,
+        purpose="diagnostic_control",
+    )
+    new_cfg = settings_for(selection, selection["rows"][0])
+    require_only_finetune_detach_margin_control(ref_cfg, new_cfg, ref_payload["config"], _expected(new_cfg, selection["rows"][0]))
+    return selection
+
+
+def make_finetune_detach_margin_selection(baseline, control_root=None, output_root=None):
+    """Build and save the immutable selection.json for the finetune_detach_margin_control campaign."""
+    from .selected_campaign import save_selection
+    selection = build_finetune_detach_margin_selection(baseline, control_root=control_root, output_root=output_root)
+    path = Path(selection["root"]) / "selection.json"
+    save_selection(path, selection)
+    return path
+
+
+def build_finetune_detach_margin_lr_0002_selection(baseline, control_root=None, output_root=None):
+    """Reuse completed WD=0 Parent; keep B-1 settings and change only fine-tune training.lr 0.001 -> 0.0002."""
+    from .selected_campaign import _expected, make_selection, settings_for
+    from .ucface_controls import ALIGNMENT_CONTROL
+
+    model_root, out_root, ref_selection_path, ref_selection_sha, binding, ref_cfg, ref_ckpt, ref_sha, ref_payload = (
+        _prepare_single_row_control_base(
+            baseline, control_root, output_root, FINETUNE_DETACH_MARGIN_LR_0002_SUBDIR, "finetune_detach_margin_lr_0002_control"
+        )
+    )
+    cfg = copy.deepcopy(baseline)
+    cfg["project"]["keep_raw_results"] = True
+    cfg["training"]["lr"] = 0.0002
+    cfg["training"]["weight_decay"] = 0.0
+    cfg["training"]["output_bn_freeze_bias"] = True
+    cfg["training"].pop("output_bn_weight_decay", None)
+    cfg["training"]["save_freq"] = 1
+    cfg["heads"]["magface"]["detach_margin_norm"] = True
+    ft_control = dict(
+        schema=FINETUNE_DETACH_MARGIN_LR_0002_SCHEMA,
+        purpose="diagnostic_control",
+        changed_parameter="training.lr+weight_decay+output_bn_freeze_bias+heads.magface.detach_margin_norm",
+        reference_value={"lr": 0.001, "weight_decay": 0.0001, "output_bn_freeze_bias": False, "detach_margin_norm": False},
+        control_value={"lr": 0.0002, "weight_decay": 0.0, "output_bn_freeze_bias": True, "detach_margin_norm": True},
+        parent_sha256=binding["sha256"],
+        reference_selection=str(ref_selection_path.resolve()),
+        reference_selection_sha256=ref_selection_sha,
+        reference_checkpoint=str(ref_ckpt.resolve()),
+        reference_sha256=ref_sha,
+        reference_model_uid="magface-ad3b19a576ec14a0883c",
+        reference_report="F:/ronbun_results/facex_workflow/reports/facex-1587c845c7c2c5f137132e9c",
+    )
+    cfg["campaign"].update(
+        parent_checkpoint=binding["path"],
+        parent_sha256=binding["sha256"],
+        parent_binding=binding,
+        finetune_control=ft_control,
+        purpose="diagnostic_control",
+    )
+    selection = make_selection(
+        cfg,
+        [dict(dataset="survface", recipe="full_fr_resize_only", heads=["magface"], seeds=[8972])],
+        out_root,
+        model_root / "facex/diagnostics" / ALIGNMENT_CONTROL,
+        purpose="diagnostic_control",
+    )
+    new_cfg = settings_for(selection, selection["rows"][0])
+    require_only_finetune_detach_margin_lr_0002_control(
+        ref_cfg, new_cfg, ref_payload["config"], _expected(new_cfg, selection["rows"][0])
+    )
+    return selection
+
+
+def make_finetune_detach_margin_lr_0002_selection(baseline, control_root=None, output_root=None):
+    """Build and save the immutable selection.json for the finetune_detach_margin_lr_0002_control campaign."""
+    from .selected_campaign import save_selection
+    selection = build_finetune_detach_margin_lr_0002_selection(baseline, control_root=control_root, output_root=output_root)
+    path = Path(selection["root"]) / "selection.json"
+    save_selection(path, selection)
+    return path
+
+
 def _eval_512_train_mode_checkpoint(ckpt_path, model, xs, diff_mask, device, *,
                                     expected_epoch=None, expected_wd=None,
+                                    expected_output_bn_wd=None, expected_freeze_bias=False,
                                     expected_parent_hash=None, expected_train_list_hash=None,
                                     expected_cfg=None, expected_ft_control=None):
     import numpy as np
@@ -491,9 +1135,18 @@ def _eval_512_train_mode_checkpoint(ckpt_path, model, xs, diff_mask, device, *,
         if actual_wd is None or float(actual_wd) != float(expected_wd):
             raise ValueError(f"Checkpoint weight_decay mismatch for {ckpt_path}: expected {expected_wd}, found {actual_wd}")
         opt_groups = payload.get("optimizer_state_dict", {}).get("param_groups", [])
-        if not isinstance(opt_groups, list) or not opt_groups or any(
+        if expected_output_bn_wd is not None:
+            if (not isinstance(opt_groups, list) or len(opt_groups) != 2
+                    or float(opt_groups[0].get("weight_decay", -1)) != float(expected_wd)
+                    or float(opt_groups[1].get("weight_decay", -1)) != float(expected_output_bn_wd)):
+                raise ValueError(f"Checkpoint optimizer param_groups mismatch for {ckpt_path}")
+        elif not isinstance(opt_groups, list) or not opt_groups or any(
                 g.get("weight_decay") is None or float(g.get("weight_decay")) != float(expected_wd) for g in opt_groups):
             raise ValueError(f"Checkpoint optimizer param_groups weight_decay mismatch for {ckpt_path}")
+    if expected_freeze_bias:
+        bn_bias = payload["backbone_state_dict"].get("bn.bias")
+        if bn_bias is None or torch.count_nonzero(bn_bias).item() != 0:
+            raise ValueError(f"Checkpoint bn.bias must be frozen at 0 for {ckpt_path}")
     if expected_cfg is not None:
         if (ckpt_cfg.get("code_fingerprints") != expected_cfg.get("code_fingerprints")
                 and not w.source_transition(ckpt_cfg.get("code_fingerprints"), expected_cfg.get("code_fingerprints"))):
@@ -511,6 +1164,8 @@ def _eval_512_train_mode_checkpoint(ckpt_path, model, xs, diff_mask, device, *,
             raise ValueError(f"Checkpoint finetune_control provenance mismatch for {ckpt_path}")
 
     sd = copy.deepcopy(payload["backbone_state_dict"])
+    bn_w_norm = round(float(sd["bn.weight"].float().norm().item()), 4)
+    bn_b_norm = round(float(sd["bn.bias"].float().norm().item()), 4)
     model.backbone.load_state_dict(sd, strict=True)
     model.backbone.train()
     chunks = []
@@ -535,11 +1190,14 @@ def _eval_512_train_mode_checkpoint(ckpt_path, model, xs, diff_mask, device, *,
         norm_lt_10=int((norms < 10.0).sum()),
         diff_id_cos_mean=round(float(cos.mean()), 4),
         diff_id_cos_p95=round(float(np.quantile(cos, 0.95)), 4),
+        bn_w_norm=bn_w_norm,
+        bn_b_norm=bn_b_norm,
     )
 
 
-def diagnose_finetune_wd_zero_epochs(selection, epochs=(1, 2, 5, 10, 40), *, evaluate_live=False):
-    """Stage-1 diagnostic: fixed 512 SurvFace train images norm (<10 count & median) and inter-identity cosine."""
+def _diagnose_512_control_epochs(selection, *, expected_schema, control_key, expected_ctrl_wd,
+                                  expected_output_bn_wd=None, expected_freeze_bias=False,
+                                  epochs=(1, 2, 5, 10, 40), evaluate_live=False):
     import hashlib
     import numpy as np
     from .dataset import FaceImageDataset
@@ -550,12 +1208,20 @@ def diagnose_finetune_wd_zero_epochs(selection, epochs=(1, 2, 5, 10, 40), *, eva
         ft_control,
         selection.get("settings", {}).get("campaign", {}).get("parent_binding"),
         selection.get("settings", {}).get("training", {}).get("weight_decay"),
+        training_cfg=selection.get("settings", {}).get("training"),
+        head_cfg=selection.get("settings", {}).get("heads", {}).get("magface"),
     )
+    if ft_control.get("schema") != expected_schema:
+        raise ValueError(f"Expected {expected_schema}, found {ft_control.get('schema')!r}")
     row = selection["rows"][0]
     cfg = settings_for(selection, row)
     expected_ctrl_cfg = _expected(cfg, row)
     expected_ref_cfg = copy.deepcopy(expected_ctrl_cfg)
+    expected_ref_cfg["training"]["lr"] = 0.001
     expected_ref_cfg["training"]["weight_decay"] = 0.0001
+    expected_ref_cfg["training"].pop("output_bn_freeze_bias", None)
+    expected_ref_cfg["training"].pop("output_bn_weight_decay", None)
+    expected_ref_cfg["head"].pop("detach_margin_norm", None)
     parent_sha = cfg["campaign"]["parent_sha256"]
     train_list_sha = cfg["dataset"]["train_list_hash"]
     ctrl_dir = final_path(cfg, row).parent
@@ -591,7 +1257,9 @@ def diagnose_finetune_wd_zero_epochs(selection, epochs=(1, 2, 5, 10, 40), *, eva
             if p.is_file():
                 live_ctrl[e] = _eval_512_train_mode_checkpoint(
                     p, model, xs, diff_mask, device,
-                    expected_epoch=e, expected_wd=0.0,
+                    expected_epoch=e, expected_wd=expected_ctrl_wd,
+                    expected_output_bn_wd=expected_output_bn_wd,
+                    expected_freeze_bias=expected_freeze_bias,
                     expected_parent_hash=parent_sha, expected_train_list_hash=train_list_sha,
                     expected_cfg=expected_ctrl_cfg, expected_ft_control=ft_control,
                 )
@@ -630,13 +1298,9 @@ def diagnose_finetune_wd_zero_epochs(selection, epochs=(1, 2, 5, 10, 40), *, eva
                 "status": "not_trained_yet",
                 "expected_checkpoint": str(ctrl_files[e]),
             }
-        rows.append(dict(
-            epoch=e,
-            reference_wd_0001=ref_metrics,
-            control_wd_0=ctrl_entry,
-        ))
+        rows.append({"epoch": e, "reference_wd_0001": ref_metrics, control_key: ctrl_entry})
     return dict(
-        schema=FINETUNE_WD_ZERO_SCHEMA,
+        schema=expected_schema,
         sample_protocol=dict(
             seed=8972,
             sample_count=512,
@@ -651,6 +1315,74 @@ def diagnose_finetune_wd_zero_epochs(selection, epochs=(1, 2, 5, 10, 40), *, eva
             **copy.deepcopy(REFERENCE_WD_0001_512_TRAIN_MODE["pre_finetune"]),
         },
         epochs=rows,
+    )
+
+
+def diagnose_finetune_wd_zero_epochs(selection, epochs=(1, 2, 5, 10, 40), *, evaluate_live=False):
+    """Stage-1 diagnostic: fixed 512 SurvFace train images norm (<10 count & median) and inter-identity cosine."""
+    return _diagnose_512_control_epochs(
+        selection,
+        expected_schema=FINETUNE_WD_ZERO_SCHEMA,
+        control_key="control_wd_0",
+        expected_ctrl_wd=0.0,
+        epochs=epochs,
+        evaluate_live=evaluate_live,
+    )
+
+
+def diagnose_finetune_output_bn_epochs(selection, epochs=(1, 2, 5, 10, 40), *, evaluate_live=False):
+    """Stage-1 diagnostic for finetune_output_bn_control on the fixed 512 SurvFace train images."""
+    return _diagnose_512_control_epochs(
+        selection,
+        expected_schema=FINETUNE_OUTPUT_BN_SCHEMA,
+        control_key="control_output_bn",
+        expected_ctrl_wd=0.0001,
+        expected_output_bn_wd=0.0,
+        expected_freeze_bias=True,
+        epochs=epochs,
+        evaluate_live=evaluate_live,
+    )
+
+
+def diagnose_finetune_wd_zero_freeze_bias_epochs(selection, epochs=(1, 2, 5, 10, 40), *, evaluate_live=False):
+    """Stage-1 diagnostic for finetune_wd_zero_freeze_bias_control on the fixed 512 SurvFace train images."""
+    return _diagnose_512_control_epochs(
+        selection,
+        expected_schema=FINETUNE_WD_ZERO_FREEZE_BIAS_SCHEMA,
+        control_key="control_wd_0_freeze_bias",
+        expected_ctrl_wd=0.0,
+        expected_output_bn_wd=None,
+        expected_freeze_bias=True,
+        epochs=epochs,
+        evaluate_live=evaluate_live,
+    )
+
+
+def diagnose_finetune_detach_margin_epochs(selection, epochs=(1, 2, 5, 10, 40), *, evaluate_live=False):
+    """Stage-1 diagnostic for finetune_detach_margin_control on the fixed 512 SurvFace train images."""
+    return _diagnose_512_control_epochs(
+        selection,
+        expected_schema=FINETUNE_DETACH_MARGIN_SCHEMA,
+        control_key="control_detach_margin",
+        expected_ctrl_wd=0.0,
+        expected_output_bn_wd=None,
+        expected_freeze_bias=True,
+        epochs=epochs,
+        evaluate_live=evaluate_live,
+    )
+
+
+def diagnose_finetune_detach_margin_lr_0002_epochs(selection, epochs=(1, 2, 5, 10, 40), *, evaluate_live=False):
+    """Stage-1 diagnostic for finetune_detach_margin_lr_0002_control on the fixed 512 SurvFace train images."""
+    return _diagnose_512_control_epochs(
+        selection,
+        expected_schema=FINETUNE_DETACH_MARGIN_LR_0002_SCHEMA,
+        control_key="control_detach_margin_lr_0002",
+        expected_ctrl_wd=0.0,
+        expected_output_bn_wd=None,
+        expected_freeze_bias=True,
+        epochs=epochs,
+        evaluate_live=evaluate_live,
     )
 
 

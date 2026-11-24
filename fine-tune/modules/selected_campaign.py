@@ -205,12 +205,16 @@ def _bind_selected_parent(cfg, base, selection, row):
                 binding,
                 cfg["training"].get("weight_decay"),
                 rows=selection.get("rows"),
+                training_cfg=cfg["training"],
+                head_cfg=cfg["heads"].get("magface"),
             )
             validate_finetune_control_spec(
                 ft_control,
                 binding,
                 cfg["training"].get("weight_decay"),
                 rows=[row],
+                training_cfg=cfg["training"],
+                head_cfg=cfg["heads"].get("magface"),
             )
             cfg["campaign"]["finetune_control"] = copy.deepcopy(ft_control)
         elif cfg["training"]["weight_decay"] != 0.0001:
@@ -342,12 +346,20 @@ def settings_for(selection, row, *, reverify=False, allow_verification_retry=Fal
         _bind_selected_parent(cfg, base, selection, row)
         cfg["paths"] = {k: str(Path(selection["root"]) / k.removesuffix("_dir") / row["run_id"]) for k in cfg["paths"]}
         cfg["selection_provenance"] = dict(row=row, recipe_source=source, driver_sha256=compute_sha256(__file__))
-        w.validate_paper_parameters(cfg)
+        ft_ctrl = cfg["campaign"].get("finetune_control")
+        if ft_ctrl and ft_ctrl.get("schema") == "facex-finetune-detach-margin-lr-0002-control-v1":
+            if float(cfg["training"].get("lr", -1)) != 0.0002:
+                raise ValueError("finetune_detach_margin_lr_0002_control requires training.lr=0.0002")
+            check_cfg = copy.deepcopy(cfg)
+            check_cfg["training"]["lr"] = 0.001
+            w.validate_paper_parameters(check_cfg)
+        else:
+            w.validate_paper_parameters(cfg)
         if cfg["training"]["drop_last"] is not False or cfg["dataset"]["val_list"]:
             raise ValueError("Selected training requires full FR split")
         if cfg["campaign"].get("finetune_control"):
-            from .parent_controls import verify_finetune_wd_zero_settings
-            verify_finetune_wd_zero_settings(selection, row, cfg)
+            from .parent_controls import verify_finetune_control_settings
+            verify_finetune_control_settings(selection, row, cfg)
         return cfg
 
     profile = cfg["finetune_profiles"][row["dataset"]]
@@ -465,15 +477,42 @@ def _validate(path, cfg, row, *, completed=True, digest=None):
     if ckpt_wd is None or float(ckpt_wd) != float(exp_wd):
         raise ValueError(f"Selected checkpoint differs: Optimizer weight_decay mismatch: checkpoint={ckpt_wd}, current={exp_wd}")
     opt_groups = payload.get("optimizer_state_dict", {}).get("param_groups", [])
-    if not isinstance(opt_groups, list) or not opt_groups or any(
+    exp_out_bn_wd = expected["training"].get("output_bn_weight_decay")
+    if exp_out_bn_wd is not None:
+        if (not isinstance(opt_groups, list) or len(opt_groups) != 2
+                or opt_groups[0].get("weight_decay") is None or float(opt_groups[0]["weight_decay"]) != float(exp_wd)
+                or opt_groups[1].get("weight_decay") is None or float(opt_groups[1]["weight_decay"]) != float(exp_out_bn_wd)):
+            raise ValueError(
+                f"Selected checkpoint differs: Optimizer param_groups weight_decay mismatch (expected [{exp_wd}, {exp_out_bn_wd}])"
+            )
+    elif not isinstance(opt_groups, list) or not opt_groups or any(
             g.get("weight_decay") is None or float(g.get("weight_decay")) != float(exp_wd) for g in opt_groups):
         raise ValueError(f"Selected checkpoint differs: Optimizer param_groups weight_decay mismatch (expected {exp_wd})")
     ft_control = cfg.get("campaign", {}).get("finetune_control")
     ckpt_exec = payload.get("extra_meta", {}).get("execution_settings")
     ckpt_ft_control = ckpt_exec.get("campaign", {}).get("finetune_control") if isinstance(ckpt_exec, dict) else None
     if ft_control is not None:
-        from .parent_controls import verify_finetune_wd_zero_checkpoint_payload
-        verify_finetune_wd_zero_checkpoint_payload(payload, path, cfg, expected, completed=completed)
+        from .parent_controls import (
+            FINETUNE_DETACH_MARGIN_LR_0002_SCHEMA,
+            FINETUNE_DETACH_MARGIN_SCHEMA,
+            FINETUNE_OUTPUT_BN_SCHEMA,
+            FINETUNE_WD_ZERO_FREEZE_BIAS_SCHEMA,
+            verify_finetune_detach_margin_checkpoint_payload,
+            verify_finetune_detach_margin_lr_0002_checkpoint_payload,
+            verify_finetune_output_bn_checkpoint_payload,
+            verify_finetune_wd_zero_checkpoint_payload,
+            verify_finetune_wd_zero_freeze_bias_checkpoint_payload,
+        )
+        if ft_control.get("schema") == FINETUNE_OUTPUT_BN_SCHEMA:
+            verify_finetune_output_bn_checkpoint_payload(payload, path, cfg, expected, completed=completed)
+        elif ft_control.get("schema") == FINETUNE_WD_ZERO_FREEZE_BIAS_SCHEMA:
+            verify_finetune_wd_zero_freeze_bias_checkpoint_payload(payload, path, cfg, expected, completed=completed)
+        elif ft_control.get("schema") == FINETUNE_DETACH_MARGIN_SCHEMA:
+            verify_finetune_detach_margin_checkpoint_payload(payload, path, cfg, expected, completed=completed)
+        elif ft_control.get("schema") == FINETUNE_DETACH_MARGIN_LR_0002_SCHEMA:
+            verify_finetune_detach_margin_lr_0002_checkpoint_payload(payload, path, cfg, expected, completed=completed)
+        else:
+            verify_finetune_wd_zero_checkpoint_payload(payload, path, cfg, expected, completed=completed)
     elif ckpt_ft_control is not None:
         raise ValueError("Selected checkpoint belongs to a finetune_control diagnostic run")
     return payload
@@ -713,8 +752,21 @@ def execute_selection(selection, stage, resume=None, runtime=None, force_reverif
             inventory = dict(schema=INVENTORY_SCHEMA, status="completed", selection=selection, models=results)
             inventory_path = root / "inventories" / (compute_config_hash(inventory) + ".json")
             w.write_json(inventory_path, inventory, immutable=True)
+            from .parent_controls import (
+                FINETUNE_DETACH_MARGIN_LR_0002_SCHEMA,
+                FINETUNE_DETACH_MARGIN_SCHEMA,
+                FINETUNE_OUTPUT_BN_SCHEMA,
+                FINETUNE_WD_ZERO_FREEZE_BIAS_SCHEMA,
+                FINETUNE_WD_ZERO_SCHEMA,
+            )
             ft_ctrl = selection.get("settings", {}).get("campaign", {}).get("finetune_control") or {}
-            if ft_ctrl.get("schema") == "facex-finetune-weight-decay-control-v1":
+            if ft_ctrl.get("schema") in (
+                FINETUNE_WD_ZERO_SCHEMA,
+                FINETUNE_OUTPUT_BN_SCHEMA,
+                FINETUNE_WD_ZERO_FREEZE_BIAS_SCHEMA,
+                FINETUNE_DETACH_MARGIN_SCHEMA,
+                FINETUNE_DETACH_MARGIN_LR_0002_SCHEMA,
+            ):
                 w.write_json(root / "inventory.json", inventory, immutable=True)
             print(f"MODEL_INVENTORY = {str(inventory_path)!r}", flush=True)
         return results

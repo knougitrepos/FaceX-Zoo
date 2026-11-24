@@ -149,6 +149,9 @@ def build_model(
         l_margin = float(head_conf.get("l_margin", 0.45))
         u_margin = float(head_conf.get("u_margin", 0.8))
         lamda = float(head_conf.get("lamda", 20.0))
+        detach_margin_norm = head_conf.get("detach_margin_norm", False)
+        if not isinstance(detach_margin_norm, bool):
+            raise ValueError("MagFace detach_margin_norm must be a boolean")
         head = MagFace(
             feat_dim=feat_dim,
             num_class=num_class,
@@ -159,6 +162,7 @@ def build_model(
             l_margin=l_margin,
             u_margin=u_margin,
             lamda=lamda,
+            detach_margin_norm=detach_margin_norm,
         )
     else:
         logger.error(f"Unsupported head type: {head_type}. Supported: 'ArcFace', 'AdaFace', 'MagFace', 'CosFace'")

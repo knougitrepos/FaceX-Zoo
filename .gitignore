@@ -21,3 +21,9 @@ __pycache__/
 /SCface_database/
 /fine-tune/data/research_v1/
 /fine-tune/data/protocols/research_v1/
+
+# Optional pilot detail when FACE_MODEL_ROOT points inside a checkout.
+**/facex/diagnostics/survface_input_pilot/*/*_dev.npz
+**/facex/clean_ucface/input_index/
+**/facex/clean_ucface/*/parent/*_vectors.npz
+**/facex/clean_ucface/*/origin/queries.npz

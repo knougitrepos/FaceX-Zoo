@@ -50,6 +50,12 @@ class ArcFace(OriginalArcFace):
 class MagFace(OriginalMagFace):
     numerical_policy = NUMERICAL_POLICY
 
+    def __init__(self, *args, detach_margin_norm: bool = False, **kwargs):
+        if not isinstance(detach_margin_norm, bool):
+            raise TypeError("detach_margin_norm must be a boolean")
+        super().__init__(*args, **kwargs)
+        self.detach_margin_norm = detach_margin_norm
+
     def forward(self, feats, labels):
         _require_fp32(feats, self.weight)
         with torch.autocast(device_type=feats.device.type, enabled=False):
@@ -57,7 +63,8 @@ class MagFace(OriginalMagFace):
 
     def _forward_fp32(self, feats, labels):
         norm = feats.norm(dim=1, keepdim=True).clamp(self.l_a, self.u_a)
-        adaptive_margin = self.calc_margin(norm).squeeze(1)
+        margin_norm = norm.detach() if self.detach_margin_norm else norm
+        adaptive_margin = self.calc_margin(margin_norm).squeeze(1)
         regularizer = self.lamda * (1 / self.u_a**2 * norm + 1 / norm)
         cosine = (F.normalize(feats) @ F.normalize(self.weight, dim=0)).clamp(-1, 1)
         rows = torch.arange(cosine.shape[0], device=cosine.device)
