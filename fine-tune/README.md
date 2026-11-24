@@ -1,6 +1,6 @@
 # FaceX-Zoo 모델 생성: 외부 데이터·모델 저장소
 
-**새 VGGFace2 Parent → SurvFace MagFace Table I 비교**는 [clean 실행 안내](notebooks/clean/HOW_TO_READ.md)에서 시작한다. 이 경로는 별도 실행 ID에 24 epoch Parent, 중간 zero-shot 지표, 40 epoch fine-tune 및 최종 Origin ROC를 저장한다.
+**새 VGGFace2 Parent → CosFace 탐침 → 4개 헤드 기준선**은 [clean 실행 안내](notebooks/clean/HOW_TO_READ.md)에서 시작한다. 네 노트북에서 중간 zero-shot 지표, 목적별 학습, 최종 Origin 비교, ronbun 내보내기를 수행한다.
 
 현재 실행 안내다. 과거 adjust1/shared_parent_v3 안내는
 [기록용 안내](docs/legacy/README_before_shared_storage_20261028.md)에 보존했다.

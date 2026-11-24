@@ -27,3 +27,6 @@ __pycache__/
 **/facex/clean_ucface/input_index/
 **/facex/clean_ucface/*/parent/*_vectors.npz
 **/facex/clean_ucface/*/origin/queries.npz
+**/facex/clean_ucface/*/parent_validation/*.npz
+**/facex/clean_ucface/*/models/*/*/*/*/origin/raw.npz
+**/facex/clean_ucface/*/models/*/*/*/*/probe_origin/raw.npz

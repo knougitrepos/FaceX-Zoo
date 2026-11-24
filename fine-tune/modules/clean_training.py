@@ -7,6 +7,7 @@ import re
 import shutil
 import traceback
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 import numpy as np
@@ -14,8 +15,15 @@ import torch
 import cv2
 from torch import nn
 
+from .alignment_resume import recovery_lock
 from .baseline_policy import DEFAULT_AUGMENTATION, code_fingerprints
-from .checkpoint_manager import CheckpointManager, compute_sha256, load_checkpoint, verify_parent_checkpoint
+from .checkpoint_manager import (
+    CheckpointManager,
+    compute_config_hash,
+    compute_sha256,
+    load_checkpoint,
+    verify_parent_checkpoint,
+)
 from .clean_benchmarks import (
     DATA,
     MILESTONES,
@@ -26,11 +34,36 @@ from .clean_benchmarks import (
     reference_gaps,
 )
 from .dataset import build_dataloader
+from .clean_protocols import HEAD_OPTIONS, LEGACY_PARENT, LEGACY_SHA, LOCAL_VARIANTS, downstream
 from .model_builder import build_model
 from .notebook_workflow import write_json
 from .shared_storage import artifact_lock
 from .survface_input_pilot import PilotMagFace
 from .trainer import set_seed
+
+
+# Completed refacto2 artifacts from before the scope reuse and report correction.
+_PRE_SCOPE_REUSE = {
+    "clean_training": "0c01d470c4677962bbd6d5357e30f413d11043f6b43342d789ea7e02b90165dd",
+    "clean_campaign": "d96092ded63c47f834264b7443f4a93a3d98920ef8962f3b97d12488de743cc8",
+    "clean_protocols": "ef40b55752ec3a52366102259d9417cd9720f54325b12d1cc2c1514077cc702f",
+}
+
+
+def matrix_recipe(run, root, dataset, head, scope):
+    r = recipe("finetune")
+    for key in HEAD_OPTIONS["magface"]:
+        if key != "scale":
+            r.pop(key)
+    return {
+        **r,
+        **downstream(root, run.parents[2], dataset, scope),
+        **HEAD_OPTIONS[head],
+        "head": head,
+        "local_head_variant": LOCAL_VARIANTS.get(head),
+        "protocol_scope": scope,
+        "origin_only": scope == "paper_table1",
+    }
 
 
 def recipe(stage):
@@ -114,9 +147,12 @@ def make_model(stage, r, parent_state=None):
     head = dict(type=r["head"], num_class=r["classes"], scale=r["scale"])
     if stage == "parent":
         head.update(margin_arc=r["m"], margin_am=r["m"] * math.sin(r["m"]))
+    else:
+        head.update({k: r[k] for k in HEAD_OPTIONS[r["head"].lower()] if k in r})
     model = build_model(backbone, head)
     if parent_state is not None:
         model.backbone.load_state_dict(parent_state, strict=True)
+    if stage == "finetune" and r["head"].lower() == "magface":
         monotonic_head = PilotMagFace(
             1024, r["classes"], **{k: r[k] for k in ("scale", "l_a", "u_a", "l_margin", "u_margin", "lamda")}
         )
@@ -201,10 +237,23 @@ def train_epoch(model, opt, stage, r, loader, epoch):
 
 def files_for_protocol():
     files = code_fingerprints()
-    for name in ("clean_training", "clean_benchmarks", "control_geometry", "survface_input_pilot"):
+    for name in (
+        "clean_training",
+        "clean_benchmarks",
+        "clean_protocols",
+        "clean_campaign",
+        "control_geometry",
+        "survface_input_pilot",
+        "alignment_resume",
+    ):
         path = Path(__file__).with_name(name + ".py")
         files[name] = compute_sha256(str(path))
     return files
+
+
+def compatible_completed_implementation(recorded):
+    current = files_for_protocol()
+    return recorded == current or recorded == {**current, **_PRE_SCOPE_REUSE}
 
 
 def receipt_checkpoint(folder, receipt):
@@ -214,20 +263,23 @@ def receipt_checkpoint(folder, receipt):
     return checked(folder / name, receipt["sha256"])
 
 
-def final_artifact(stage_dir):
+def final_artifact(stage_dir, *, expected_recipe=None):
     """Verify final receipt, checkpoint and fixed diagnostic schedule before handoff."""
     folder = Path(stage_dir)
     report = json.loads(
         checked(folder / "summary.json", (folder / "COMPLETED").read_text().strip()).read_bytes()
     )
     contract = json.loads(checked(folder / "plan.json", report["plan_sha256"]).read_bytes())
-    r = recipe(contract["stage"])
+    r = expected_recipe if expected_recipe is not None else recipe(contract["stage"])
     if (
-        contract["stage"] != folder.name
+        (expected_recipe is None and contract["stage"] != folder.name)
         or contract["recipe"] != r
         or report["status"] != "completed"
         or len(report["epochs"]) != r["epochs"]
         or report["epoch"] != r["epochs"]
+        or [row["epoch"] for row in report["epochs"]] != list(range(1, r["epochs"] + 1))
+        or report["parent_sha256"] != contract["parent_sha256"]
+        or report.get("reused_from") != contract.get("reused_from")
     ):
         raise ValueError("Incomplete clean training stage")
     if contract["stage"] == "parent" and [
@@ -268,32 +320,136 @@ def publish_summary(folder, summary):
     temporary.replace(folder / "COMPLETED")
 
 
-def run_stage(data_root, run_dir, stage, *, seed=8972, keep_raw_results=False, resume=False):
+def checkpoint_config(stage, r, train_list, *, matrix):
+    config = dict(
+        stage="pretrain" if stage == "parent" else "finetune",
+        backbone=dict(type="MobileFaceNet", feat_dim=1024, dropout_rate=r["dropout"]),
+        head=dict(
+            type=r["head"],
+            num_class=r["classes"],
+            **{k: r[k] for k in HEAD_OPTIONS[r["head"].lower()] if k in r},
+        ),
+        training=r,
+        dataset=dict(name=r["dataset"], train_list=str(train_list)),
+    )
+    if matrix:
+        config["preprocessing"] = r["preprocessing"]
+    return config
+
+
+def publish_scope_reuse(
+    folder, target_recipe, source_checkpoint, source_summary, source_plan, keep_raw_results
+):
+    """Publish a scope-local receipt and an independent copy of the verified final weights."""
+    original = source_plan["recipe"]
+    scope_fields = {"protocol_scope", "origin_only"}
+    if (
+        source_plan["stage"] != "finetune"
+        or source_plan["initial_weights"] != "clean_parent"
+        or original["dataset"] not in ("tinyface", "scface")
+        or original["protocol_scope"] == target_recipe["protocol_scope"]
+        or {k: v for k, v in original.items() if k not in scope_fields}
+        != {k: v for k, v in target_recipe.items() if k not in scope_fields}
+        or source_summary.get("reused_from") is not None
+    ):
+        raise ValueError("Scopes do not share the same completed training contract")
+
+    with artifact_lock(folder):
+        if folder.exists():
+            raise FileExistsError(f"Preserve existing scope artifacts before publishing reuse: {folder}")
+        with TemporaryDirectory(dir=folder.parent) as temp:
+            staging = Path(temp) / "model"
+            staging.mkdir()
+            copied = staging / source_summary["checkpoint"]
+            shutil.copyfile(source_checkpoint, copied)
+            checked(copied, source_summary["sha256"])
+            state = load_checkpoint(str(copied))
+            config = checkpoint_config("finetune", original, source_plan["train_list"], matrix=True)
+            if (
+                state["config"] != config
+                or state["config_hash"] != compute_config_hash(config)
+                or state["stage"] != "finetune"
+                or state["completed"] is not True
+                or state["epoch"] != original["epochs"]
+                or state["seed"] != source_plan["seed"]
+                or state["parent_hash"] != source_plan["parent_sha256"]
+                or state["extra_meta"]["plan_sha256"] != source_summary["plan_sha256"]
+            ):
+                raise ValueError("Source checkpoint does not match the completed training contract")
+            del state
+
+            lineage = dict(
+                protocol_scope=original["protocol_scope"],
+                checkpoint=str(source_checkpoint),
+                checkpoint_sha256=source_summary["sha256"],
+                plan_sha256=source_summary["plan_sha256"],
+                summary_sha256=compute_sha256(source_checkpoint.parent / "summary.json"),
+                keep_raw_results=source_plan["keep_raw_results"],
+            )
+            plan = dict(
+                source_plan, recipe=target_recipe, keep_raw_results=keep_raw_results, reused_from=lineage
+            )
+            plan_path = Path(write_json(staging / "plan.json", plan, immutable=True))
+            summary = dict(
+                source_summary,
+                plan_sha256=compute_sha256(plan_path),
+                protocol_scope=target_recipe["protocol_scope"],
+                origin_only=target_recipe["origin_only"],
+                keep_raw_results=keep_raw_results,
+                reused_from=lineage,
+            )
+            publish_summary(staging, summary)
+            final_artifact(staging, expected_recipe=target_recipe)
+            staging.rename(folder)
+
+
+def load_parent(run, source, seed):
+    if source == "legacy_parent_wd0":
+        path, digest, epoch, parent_seed = run.parents[2] / LEGACY_PARENT, LEGACY_SHA, 40, 8972
+    elif source == "clean_parent":
+        path, report = final_artifact(run / "parent")
+        digest, epoch, parent_seed = report["sha256"], recipe("parent")["epochs"], seed
+    else:
+        raise ValueError(f"Unknown parent source: {source}")
+    return verify_parent_checkpoint(
+        str(path), expected_hash=digest, expected_seed=parent_seed, target_epoch=epoch, require_completed=True
+    )
+
+
+def run_stage(
+    data_root,
+    run_dir,
+    stage,
+    *,
+    seed=8972,
+    keep_raw_results=False,
+    resume=False,
+    matrix=None,
+    parent_source="clean_parent",
+):
     if not torch.cuda.is_available():
         raise RuntimeError("Clean training requires CUDA")
     torch.set_num_threads(2)
     root, run = Path(data_root).resolve(), Path(run_dir).resolve()
-    folder, r = run / stage, recipe(stage)
-    train_list = input_list(root, r)
+    if matrix is None:
+        folder, r = run / stage, recipe(stage)
+        train_list = input_list(root, r)
+    else:
+        folder, r = matrix
+        train_list = Path(r["prepared"]) / "train_list.txt"
     parent_hash, parent_state = None, None
     if stage == "finetune":
-        parent, receipt = final_artifact(run / "parent")
-        payload, parent_hash = verify_parent_checkpoint(
-            str(parent),
-            expected_hash=receipt["sha256"],
-            expected_seed=seed,
-            target_epoch=recipe("parent")["epochs"],
-            require_completed=True,
-        )
+        payload, parent_hash = load_parent(run, parent_source, seed)
         parent_state = payload["backbone_state_dict"]
         del payload
-    with artifact_lock(folder):
+    lock = recovery_lock if resume else artifact_lock
+    with lock(folder):
         if (folder / "COMPLETED").exists() or (folder.exists() and not resume):
             raise FileExistsError(
                 f"Existing stage. Read its summary or explicitly resume a partial run: {folder}"
             )
-        if resume and not (folder / "plan.json").is_file():
-            raise ValueError("No stage plan to resume")
+        if resume and not (folder / "plan.json").is_file() and folder.exists() and any(folder.iterdir()):
+            raise ValueError("No stage plan to validate the existing results")
         folder.mkdir(parents=True, exist_ok=True)
         panels, panel_info = prepare_panels(root) if stage == "parent" else (None, {})
         plan = dict(
@@ -303,7 +459,7 @@ def run_stage(data_root, run_dir, stage, *, seed=8972, keep_raw_results=False, r
             recipe=r,
             train_list=str(train_list),
             parent_sha256=parent_hash,
-            initial_weights="random" if stage == "parent" else "same_run_parent",
+            initial_weights="random" if stage == "parent" else parent_source,
             keep_raw_results=keep_raw_results,
             milestones=list(MILESTONES) if panels else [],
             monitor_inputs={k: v for k, v in panel_info.items() if k != "prepare_seconds"},
@@ -358,6 +514,7 @@ def run_stage(data_root, run_dir, stage, *, seed=8972, keep_raw_results=False, r
             random.setstate(rng["python_rng"])
             del state
         manager = CheckpointManager(str(folder))
+        config = checkpoint_config(stage, r, train_list, matrix=matrix is not None)
         try:
             for epoch in range(len(rows) + 1, r["epochs"] + 1):
                 loss = train_epoch(model, opt, stage, r, loader, epoch)
@@ -366,8 +523,10 @@ def run_stage(data_root, run_dir, stage, *, seed=8972, keep_raw_results=False, r
                     with torch.no_grad():
                         directions = nn.functional.normalize(model.head.weight, dim=0)
                         row["head_direction_norm"] = float(directions.mean(dim=1).norm())
+                        row["output_bn_weight_l2"] = float(model.backbone.bn.weight.norm())
                     print(
-                        f"SurvFace epoch {epoch}, loss {loss:.4f}, head direction {row['head_direction_norm']:.4f}",
+                        f"{r['dataset']}/{r['head']} epoch {epoch}, loss {loss:.4f}, "
+                        f"head direction {row['head_direction_norm']:.4f}",
                         flush=True,
                     )
                 attempt = f"epoch_{epoch:02d}_{uuid4().hex[:12]}"
@@ -386,13 +545,6 @@ def run_stage(data_root, run_dir, stage, *, seed=8972, keep_raw_results=False, r
                         flush=True,
                     )
                     print("SCFace by distance", m["scface"].get("distances", {}), flush=True)
-                config = dict(
-                    stage="pretrain" if stage == "parent" else "finetune",
-                    backbone=dict(type="MobileFaceNet", feat_dim=1024, dropout_rate=r["dropout"]),
-                    head=dict(type=r["head"], num_class=r["classes"]),
-                    training=r,
-                    dataset=dict(name=r["dataset"], train_list=str(train_list)),
-                )
                 current = Path(
                     manager.save_checkpoint(
                         attempt + ".pt",
@@ -432,6 +584,14 @@ def run_stage(data_root, run_dir, stage, *, seed=8972, keep_raw_results=False, r
                 keep_raw_results=keep_raw_results,
                 guide="HOW_TO_READ.md",
             )
+            if matrix is not None:
+                summary.update(
+                    protocol_scope=r["protocol_scope"],
+                    origin_only=r["origin_only"],
+                    local_head_variant=r["local_head_variant"],
+                    dataset=r["dataset"],
+                    head=r["head"],
+                )
             publish_summary(folder, summary)
             return summary
         except BaseException:

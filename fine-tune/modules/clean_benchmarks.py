@@ -41,13 +41,15 @@ def checked(path, expected):
     return path
 
 
-def evaluation_rows(root, dataset):
+def evaluation_rows(root, dataset, *, distractors=False):
     directory, protocol, digest = DATA[dataset]
     base = root / directory
     path = checked(base / "protocols/shared_v1" / protocol / "roles.csv", digest)
     roles = {"test_gallery", "test_registered_probe"}
     if dataset == "survface":
         roles.add("test_unknown_probe")
+    if dataset == "tinyface" and distractors:
+        roles.add("test_gallery_distractor")
     with path.open(encoding="utf-8-sig", newline="") as source:
         rows = [r for r in csv.DictReader(source) if r["role"] in roles]
     if any(r["fr_train"] != "0" for r in rows):
@@ -315,4 +317,87 @@ def evaluate_survface(backbone, data_root, raw_file=None):
             registered=registered,
             image_ids=np.array([r["image_id"] for r in probes]),
         )
-    return survface_roc(best, genuine, ranks, registered)
+    return {
+        **survface_roc(best, genuine, ranks, registered),
+        "unknown_cos_ge_095": int(np.count_nonzero(best[~registered] >= np.float32(0.95))),
+    }
+
+
+def rank_one_distractors(vectors, rows, distractors, device):
+    """Compute conservative Rank-1 with the full distractor set in score blocks."""
+    gallery = np.array([r["role"] == "test_gallery" for r in rows])
+    ids = np.asarray([r["identity_id"] for r in rows])
+    hits = []
+    g_vectors = torch.as_tensor(vectors[gallery], device=device)
+    for probe in np.array_split(np.flatnonzero(~gallery), max(1, (sum(~gallery) + 127) // 128)):
+        queries = torch.as_tensor(vectors[probe], device=device)
+        scores = queries @ g_vectors.T
+        match = torch.as_tensor(ids[probe, None] == ids[gallery][None, :], device=device)
+        genuine = scores.masked_fill(~match, -torch.inf).amax(1)
+        impostor = scores.masked_fill(match, -torch.inf).amax(1)
+        for start in range(0, len(distractors), 16384):
+            block = torch.as_tensor(distractors[start : start + 16384], device=device)
+            impostor = torch.maximum(impostor, (queries @ block.T).amax(1))
+        hits.extend((genuine > impostor).cpu().tolist())
+    return dict(
+        correct=sum(hits),
+        probes=len(hits),
+        rank1=sum(hits) / len(hits),
+        gallery=int(gallery.sum()),
+        distractors=len(distractors),
+    ), np.asarray(hits)
+
+
+def evaluate_aligned(backbone, root, dataset, affine_path, raw_file=None, *, include_distractors=True):
+    base, rows = evaluation_rows(Path(root), dataset, distractors=include_distractors)
+    with Path(affine_path).open(encoding="utf-8-sig", newline="") as f:
+        matrices = {
+            r["image_id"]: (
+                r["source_sha256"],
+                np.array([float(r[k]) for k in ("a", "b", "tx", "c", "d", "ty")]).reshape(2, 3),
+            )
+            for r in csv.DictReader(f)
+        }
+    regular = [r for r in rows if r["role"] != "test_gallery_distractor"]
+    distractors = [r for r in rows if r["role"] == "test_gallery_distractor"]
+    counts = (len(regular), len(distractors), sum(r["role"] == "test_gallery" for r in regular))
+    if (
+        counts
+        != {"tinyface": (8171, 153428 if include_distractors else 0, 4443), "scface": (1280, 0, 80)}[dataset]
+    ):
+        raise ValueError("Unexpected aligned official cohort")
+
+    def decode(row):
+        img, digest = read_bgr(base / row["image_path"])
+        expected, matrix = matrices[row["image_id"]]
+        if digest != expected:
+            raise ValueError(f"Image differs from frozen alignment source: {row['image_id']}")
+        return cv2.warpAffine(img, matrix, (112, 112), flags=cv2.INTER_CUBIC)
+
+    backbone.eval()
+    with ThreadPoolExecutor(8) as pool:
+
+        def extract(batch_rows):
+            array = np.empty((len(batch_rows), 1024), dtype=np.float32)
+            for start in range(0, len(batch_rows), 128):
+                batch = list(pool.map(decode, batch_rows[start : start + 128]))
+                array[start : start + len(batch)] = embed(backbone, np.stack(batch))
+            return array
+
+        regular_vectors = extract(regular)
+        result = dict(without_distractors=rank_one(regular_vectors, regular))
+        if distractors:
+            distractor_vectors = extract(distractors)
+            result["with_distractors"], hits = rank_one_distractors(
+                regular_vectors, regular, distractor_vectors, next(backbone.parameters()).device
+            )
+        if raw_file is not None:
+            arrays = dict(vectors=regular_vectors, image_ids=[r["image_id"] for r in regular])
+            if distractors:
+                arrays.update(
+                    distractor_vectors=distractor_vectors,
+                    distractor_ids=[r["image_id"] for r in distractors],
+                    distractor_rank1_hits=hits,
+                )
+            np.savez(raw_file, **arrays)
+    return result
