@@ -42,8 +42,18 @@ from .survface_input_pilot import PilotMagFace
 from .trainer import set_seed
 
 
-# Completed refacto2 artifacts from before the scope reuse and report correction.
+# Historical complete implementations. Only complete, verified results may use these.
+_BATCH256_V3_TRAINING = (
+    "91e2c6d752710cb35946e38a264167b4f574f83d0f5e78c8f4d639a07c9eb38e",
+    "402cc58c5d7b9f943749f866da7bdebcf3f975ee11f6c6167dd8a70833e00bce",
+)
+_PRE_PARENT_V3 = {
+    "clean_training": "31370e2608fff71960ce81a47f3879bbee2bd93ed91b59bbe18183dde30d5201",
+    "clean_benchmarks": "c421e18a4fcb3cfdecf2ef53c58126f69044487bd2e64245f27d18e306c5076c",
+    "clean_campaign": "92fc4b0723f26aacdfdb4a125b949b13366582e8a7e92f064ed5fdba9f62d4cc",
+}
 _PRE_SCOPE_REUSE = {
+    **_PRE_PARENT_V3,
     "clean_training": "0c01d470c4677962bbd6d5357e30f413d11043f6b43342d789ea7e02b90165dd",
     "clean_campaign": "d96092ded63c47f834264b7443f4a93a3d98920ef8962f3b97d12488de743cc8",
     "clean_protocols": "ef40b55752ec3a52366102259d9417cd9720f54325b12d1cc2c1514077cc702f",
@@ -75,17 +85,19 @@ def recipe(stage):
             manifest_hash="4d5fbaf67b0752f590e88af381f7ba9d538e422d22630d404c4a378d9da98ead",
             images=3141890,
             classes=8631,
-            batch=256,
+            batch=128,
             epochs=24,
             dropout=0.0,
             optimizer="SGD",
             head="ArcFace",
             m=0.5,
             scale=64.0,
-            lr=0.1,
-            warmup_start=0.01,
+            lr=0.025,
+            warmup_start=0.0025,
+            warmup_epochs=2,
+            max_grad_norm=5.0,
             momentum=0.9,
-            conv_linear_decay=0.0001,
+            backbone_decay=0.0001,
             other_decay=0.0,
             milestones=[10, 18, 22],
             gamma=0.1,
@@ -140,16 +152,20 @@ def input_list(root, r):
     return checked(folder / "train_list.txt", r["train_hash"])
 
 
-def make_model(stage, r, parent_state=None):
-    if (stage == "finetune") != (parent_state is not None):
-        raise ValueError("Only fine-tuning accepts and requires completed parent weights")
-    backbone = dict(type="MobileFaceNet", feat_dim=1024, dropout_rate=r["dropout"])
+def head_config(stage, r):
     head = dict(type=r["head"], num_class=r["classes"], scale=r["scale"])
     if stage == "parent":
         head.update(margin_arc=r["m"], margin_am=r["m"] * math.sin(r["m"]))
     else:
         head.update({k: r[k] for k in HEAD_OPTIONS[r["head"].lower()] if k in r})
-    model = build_model(backbone, head)
+    return head
+
+
+def make_model(stage, r, parent_state=None):
+    if (stage == "finetune") != (parent_state is not None):
+        raise ValueError("Only fine-tuning accepts and requires completed parent weights")
+    backbone = dict(type="MobileFaceNet", feat_dim=1024, dropout_rate=r["dropout"])
+    model = build_model(backbone, head_config(stage, r))
     if parent_state is not None:
         model.backbone.load_state_dict(parent_state, strict=True)
     if stage == "finetune" and r["head"].lower() == "magface":
@@ -164,12 +180,15 @@ def make_model(stage, r, parent_state=None):
 
 def optimizer_for(model, stage, r):
     if stage == "parent":
-        decay = [m.weight for m in model.backbone.modules() if isinstance(m, (nn.Conv2d, nn.Linear))]
+        decay = [
+            m.weight for m in model.backbone.modules()
+            if isinstance(m, (nn.Conv2d, nn.Linear, nn.BatchNorm2d, nn.PReLU)) and m.weight.requires_grad
+        ]
         ids = {id(p) for p in decay}
-        other = [p for p in model.parameters() if p.requires_grad and id(p) not in ids]
+        other = [p for p in model.parameters() if id(p) not in ids]
         return torch.optim.SGD(
             [
-                dict(params=decay, weight_decay=r["conv_linear_decay"]),
+                dict(params=decay, weight_decay=r["backbone_decay"]),
                 dict(params=other, weight_decay=r["other_decay"]),
             ],
             lr=r["lr"],
@@ -204,13 +223,17 @@ def configure_epoch(model, opt, stage, r, epoch):
                 m.train(warm).requires_grad_(warm)
 
 
-def train_epoch(model, opt, stage, r, loader, epoch):
+def train_epoch(model, opt, stage, r, loader, epoch, *, diagnostics=None):
     configure_epoch(model, opt, stage, r, epoch)
     loader.batch_sampler.set_epoch(epoch, 0)
     total, count = 0.0, 0
+    clip_limit = r.get("max_grad_norm")
+    peak_grad_norm = None
     for i, (xs, ys) in enumerate(loader):
-        if stage == "parent" and epoch == 1:
-            lr = r["warmup_start"] + (r["lr"] - r["warmup_start"]) * i / max(1, len(loader) - 1)
+        if stage == "parent" and epoch <= r["warmup_epochs"]:
+            step = (epoch - 1) * len(loader) + i
+            fraction = step / max(1, r["warmup_epochs"] * len(loader) - 1)
+            lr = r["warmup_start"] + (r["lr"] - r["warmup_start"]) * fraction
             for group in opt.param_groups:
                 group["lr"] = lr
         opt.zero_grad(set_to_none=True)
@@ -219,20 +242,75 @@ def train_epoch(model, opt, stage, r, loader, epoch):
         loss = nn.functional.cross_entropy(logits, ys)
         if reg is not None:
             loss = loss + reg.mean()
-        if not torch.isfinite(loss):
-            raise FloatingPointError(f"Nonfinite loss at epoch {epoch}, batch {i + 1}")
         loss.backward()
-        grads = [p.grad for p in model.parameters() if p.grad is not None]
-        if not torch.nn.utils.get_total_norm(grads, float("inf")).isfinite():
+        params = [p for p in model.parameters() if p.grad is not None]
+        if clip_limit is not None:
+            norm = nn.utils.clip_grad_norm_(params, clip_limit, error_if_nonfinite=False)
+        else:
+            norm = nn.utils.get_total_norm([p.grad for p in params], float("inf"))
+        # Read both scalars in one transfer before the optimizer queues its update.
+        batch_loss, grad_norm = torch.stack((loss.detach(), norm.detach())).tolist()
+        if not math.isfinite(batch_loss):
+            raise FloatingPointError(f"Nonfinite loss at epoch {epoch}, batch {i + 1}")
+        if not math.isfinite(grad_norm):
             raise FloatingPointError(f"Nonfinite gradient at epoch {epoch}, batch {i + 1}")
+        if clip_limit is not None:
+            peak_grad_norm = grad_norm if peak_grad_norm is None else max(peak_grad_norm, grad_norm)
         opt.step()
-        total += float(loss.detach()) * len(ys)
+        total += batch_loss * len(ys)
         count += len(ys)
         if (i + 1) % 500 == 0:
             print(f"{stage} ep {epoch} batch {i + 1}/{len(loader)}, loss {total / count:.4f}", flush=True)
     if count != len(loader.dataset):
         raise ValueError("Incomplete training epoch")
+    if diagnostics is not None and peak_grad_norm is not None:
+        diagnostics["grad_norm_clipped_max"] = peak_grad_norm
     return total / count
+
+
+@torch.no_grad()
+def parent_diagnostics(model):
+    layers = list(model.backbone.modules())
+    return dict(
+        max_abs_prelu=float(torch.stack([m.weight.abs().max() for m in layers if isinstance(m, nn.PReLU)]).max()),
+        max_bn_running_var=float(torch.stack([
+            m.running_var.max() for m in layers if isinstance(m, (nn.BatchNorm2d, nn.BatchNorm1d))
+        ]).max()),
+        max_linear_row_norm=float(model.backbone.linear.weight.norm(dim=1).max()),
+        head_direction_norm=float(nn.functional.normalize(model.head.weight, dim=0).mean(dim=1).norm()),
+    )
+
+
+def parent_health_issue(row, previous):
+    limits = {"max_abs_prelu": 10.0, "max_bn_running_var": 1e5}
+    if previous and row["epoch"] >= 2:
+        limits["loss"] = min(r["loss"] for r in previous) + 3.0
+    failures = [f"{key}={row[key]:.6g} (limit {limit:.6g})" for key, limit in limits.items()
+                if not math.isfinite(row[key]) or row[key] > limit]
+    return ", ".join(failures)
+
+
+def finetune_health_issue(row, previous, warmup_epochs):
+    failures = []
+    loss = row["loss"]
+    if not math.isfinite(loss):
+        failures.append(f"loss={loss}")
+    elif previous and row["epoch"] > warmup_epochs + 1:
+        limit = min(r["loss"] for r in previous) + 5.0
+        if loss > limit:
+            failures.append(f"loss={loss:.6g} (maximum {limit:.6g})")
+    direction = row["head_direction_norm"]
+    if not math.isfinite(direction) or direction > 0.85:
+        failures.append(f"head_direction_norm={direction:.6g} (maximum 0.85)")
+    bn_norm = row["output_bn_weight_l2"]
+    if not math.isfinite(bn_norm) or bn_norm < 1.0:
+        failures.append(f"output_bn_weight_l2={bn_norm:.6g} (minimum 1.0)")
+    return ", ".join(failures)
+
+
+def enforce_health(stage, row):
+    if row.get("health_gate_failure"):
+        raise RuntimeError(f"{stage.capitalize()} health gate stopped epoch {row['epoch']}: {row['health_gate_failure']}")
 
 
 def files_for_protocol():
@@ -253,7 +331,9 @@ def files_for_protocol():
 
 def compatible_completed_implementation(recorded):
     current = files_for_protocol()
-    return recorded == current or recorded == {**current, **_PRE_SCOPE_REUSE}
+    versions = [_PRE_PARENT_V3, _PRE_SCOPE_REUSE]
+    versions.extend({"clean_training": digest} for digest in _BATCH256_V3_TRAINING)
+    return recorded == current or any(recorded == {**current, **version} for version in versions)
 
 
 def receipt_checkpoint(folder, receipt):
@@ -271,6 +351,15 @@ def final_artifact(stage_dir, *, expected_recipe=None):
     )
     contract = json.loads(checked(folder / "plan.json", report["plan_sha256"]).read_bytes())
     r = expected_recipe if expected_recipe is not None else recipe(contract["stage"])
+    if expected_recipe is None and contract["stage"] == "parent" and contract["recipe"] != r:
+        # Match the complete historical contract without permitting resume with changed settings.
+        recorded = contract["implementation"]
+        if compatible_completed_implementation(recorded):
+            if recorded["clean_training"] in _BATCH256_V3_TRAINING:
+                r = dict(r, batch=256, lr=0.05, warmup_start=0.005)
+            elif recorded["clean_training"] in (_PRE_PARENT_V3["clean_training"], _PRE_SCOPE_REUSE["clean_training"]):
+                r = {k: v for k, v in r.items() if k not in ("max_grad_norm", "warmup_epochs", "backbone_decay")}
+                r.update(batch=256, lr=0.1, warmup_start=0.01, conv_linear_decay=0.0001)
     if (
         (expected_recipe is None and contract["stage"] != folder.name)
         or contract["recipe"] != r
@@ -324,11 +413,7 @@ def checkpoint_config(stage, r, train_list, *, matrix):
     config = dict(
         stage="pretrain" if stage == "parent" else "finetune",
         backbone=dict(type="MobileFaceNet", feat_dim=1024, dropout_rate=r["dropout"]),
-        head=dict(
-            type=r["head"],
-            num_class=r["classes"],
-            **{k: r[k] for k in HEAD_OPTIONS[r["head"].lower()] if k in r},
-        ),
+        head=head_config(stage, r),
         training=r,
         dataset=dict(name=r["dataset"], train_list=str(train_list)),
     )
@@ -452,12 +537,26 @@ def run_stage(
             raise ValueError("No stage plan to validate the existing results")
         folder.mkdir(parents=True, exist_ok=True)
         panels, panel_info = prepare_panels(root) if stage == "parent" else (None, {})
+        loader = build_dataloader(
+            str(train_list.parent),
+            str(train_list),
+            batch_size=r["batch"],
+            num_workers=6 if stage == "parent" else 4,
+            cache_dir=str(run.parent / "input_index"),
+            seed=seed,
+            prefetch_factor=4,
+            augmentation=r["augmentation"],
+        )
+        if len(loader.dataset) != r["images"]:
+            raise ValueError("Train list count mismatch")
         plan = dict(
             stage=stage,
             run_dir=str(run),
             seed=seed,
             recipe=r,
             train_list=str(train_list),
+            num_workers=loader.num_workers,
+            prefetch_factor=loader.prefetch_factor,
             parent_sha256=parent_hash,
             initial_weights="random" if stage == "parent" else parent_source,
             keep_raw_results=keep_raw_results,
@@ -475,18 +574,6 @@ def run_stage(
         set_seed(seed)
         model = make_model(stage, r, parent_state)
         opt = optimizer_for(model, stage, r)
-        loader = build_dataloader(
-            str(train_list.parent),
-            str(train_list),
-            batch_size=r["batch"],
-            num_workers=4,
-            cache_dir=str(run.parent / "input_index"),
-            seed=seed,
-            prefetch_factor=4,
-            augmentation=r["augmentation"],
-        )
-        if len(loader.dataset) != r["images"]:
-            raise ValueError("Train list count mismatch")
         progress = folder / "progress.json"
         rows, previous = [], None
         preparation_seconds = panel_info.get("prepare_seconds")
@@ -496,6 +583,7 @@ def run_stage(
             if saved["plan_sha256"] != plan_hash:
                 raise ValueError("Resume contract mismatch")
             previous = receipt_checkpoint(folder, saved)
+            enforce_health(stage, saved["epochs"][-1])
             state = load_checkpoint(str(previous))
             rows = saved["epochs"]
             if (
@@ -517,20 +605,29 @@ def run_stage(
         config = checkpoint_config(stage, r, train_list, matrix=matrix is not None)
         try:
             for epoch in range(len(rows) + 1, r["epochs"] + 1):
-                loss = train_epoch(model, opt, stage, r, loader, epoch)
-                row = dict(epoch=epoch, loss=loss, ending_lrs=[g["lr"] for g in opt.param_groups])
-                if stage == "finetune":
+                row = dict(epoch=epoch)
+                options = {"diagnostics": row} if stage == "parent" else {}
+                loss = train_epoch(model, opt, stage, r, loader, epoch, **options)
+                row.update(loss=loss, ending_lrs=[g["lr"] for g in opt.param_groups])
+                if stage == "parent":
+                    row.update(parent_diagnostics(model))
+                    issue = parent_health_issue(row, rows)
+                    print(f"Parent diagnostics {row}", flush=True)
+                else:
                     with torch.no_grad():
                         directions = nn.functional.normalize(model.head.weight, dim=0)
                         row["head_direction_norm"] = float(directions.mean(dim=1).norm())
                         row["output_bn_weight_l2"] = float(model.backbone.bn.weight.norm())
+                    issue = finetune_health_issue(row, rows, r["warmup_epochs"])
                     print(
                         f"{r['dataset']}/{r['head']} epoch {epoch}, loss {loss:.4f}, "
                         f"head direction {row['head_direction_norm']:.4f}",
                         flush=True,
                     )
+                if issue:
+                    row["health_gate_failure"] = issue
                 attempt = f"epoch_{epoch:02d}_{uuid4().hex[:12]}"
-                if stage == "parent" and epoch in MILESTONES:
+                if stage == "parent" and epoch in MILESTONES and not row.get("health_gate_failure"):
                     raw = folder / (attempt + "_vectors.npz") if keep_raw_results else None
                     row["zero_shot"] = monitor(model.backbone, panels, raw_file=raw)
                     row["reference"] = reference_gaps(row["zero_shot"]["metrics"], epoch)
@@ -553,7 +650,7 @@ def run_stage(
                         None,
                         epoch,
                         extra_meta=dict(
-                            completed=epoch == r["epochs"],
+                            completed=epoch == r["epochs"] and not row.get("health_gate_failure"),
                             seed=seed,
                             stage=config["stage"],
                             head=r["head"],
@@ -574,6 +671,7 @@ def run_stage(
                     epochs=rows,
                 )
                 write_json(progress, saved)
+                enforce_health(stage, row)
                 if previous and not keep_raw_results:
                     previous.unlink(missing_ok=True)
                 previous = current

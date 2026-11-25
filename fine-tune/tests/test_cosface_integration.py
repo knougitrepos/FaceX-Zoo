@@ -1,5 +1,6 @@
 """CosFace math, provenance and notebook opt-in, using CPU and temporary outputs."""
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -15,6 +16,13 @@ from modules.checkpoint_manager import (
     extract_model_config, compute_config_hash, compare_configs,
 )
 from head.AM_Softmax import AM_Softmax
+
+
+def baseline_cell_source(cell, settings_path):
+    source = re.sub(r"^SETTINGS_PATH = .*$", lambda _: f"SETTINGS_PATH = Path({str(settings_path)!r})",
+                    "".join(cell["source"]), flags=re.MULTILINE)
+    # The baseline campaign plans the saved head list. Diagnostic campaigns use pinned selections.
+    return re.sub(r"^CAMPAIGN = .*$", 'CAMPAIGN = "baseline"', source, flags=re.MULTILINE)
 
 
 def test_cosface_formula_backbone_gradients_and_inference():
@@ -84,10 +92,7 @@ def test_notebook_preserves_explicit_saved_heads(name, stage, heads, tmp_path, m
     for cell in notebook["cells"]:
         if cell["cell_type"] != "code":
             continue
-        import re
-        source = re.sub(r'^SETTINGS_PATH = .*$',
-                        lambda _: f"SETTINGS_PATH = Path({str(saved_path)!r})",
-                        "".join(cell["source"]), flags=re.MULTILINE)
+        source = baseline_cell_source(cell, saved_path)
         exec(compile(source, name, "exec"), namespace)
     assert namespace["EXECUTE"] is False
     assert namespace["SETTINGS_PATH"] == saved_path
@@ -103,7 +108,6 @@ def test_notebook_preserves_explicit_saved_heads(name, stage, heads, tmp_path, m
 
 
 def test_new_campaign_notebooks_run_sequentially_with_fresh_namespaces(tmp_path, monkeypatch, external_tree):
-    import re
     from modules import process_runner, finetune_protocol
     data, models = external_tree
     monkeypatch.setenv("FACE_DATASET_ROOT", str(data))
@@ -120,14 +124,13 @@ def test_new_campaign_notebooks_run_sequentially_with_fresh_namespaces(tmp_path,
         for cell in notebook["cells"]:
             if cell["cell_type"] != "code":
                 continue
-            source = re.sub(r'^SETTINGS_PATH = .*$', lambda _: f"SETTINGS_PATH = Path({str(saved_path)!r})",
-                            "".join(cell["source"]), flags=re.MULTILINE)
+            source = baseline_cell_source(cell, saved_path)
             exec(compile(source, str(path), "exec"), namespace)
         assert namespace["SETTINGS_PATH"] == saved_path
         if "EXECUTE" in namespace:
             assert namespace["EXECUTE"] is False
     saved = flow.resolve_settings(ROOT, saved_path)
-    assert saved["data_integrity"]["mode"] == "content_verified_reuse"
+    assert saved["data_integrity"]["mode"] == "immutable_verified_reuse"
     assert saved["campaign"]["finetune_datasets"] == ["survface", "tinyface", "scface"]
     assert "shared_v1_boundary" in saved["paths"]["checkpoint_dir"]
     assert Path(saved["paths"]["checkpoint_dir"]).is_relative_to(models)

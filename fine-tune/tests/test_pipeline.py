@@ -12,16 +12,13 @@ import torch
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 FINETUNE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-MODULES_DIR = os.path.abspath(os.path.join(FINETUNE_DIR, "modules"))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 if FINETUNE_DIR not in sys.path:
     sys.path.insert(0, FINETUNE_DIR)
-if MODULES_DIR not in sys.path:
-    sys.path.insert(0, MODULES_DIR)
 
-from model_builder import build_model
-from checkpoint_manager import CheckpointManager, compute_sha256, verify_parent_checkpoint, load_checkpoint
+from modules.model_builder import build_model
+from modules.checkpoint_manager import CheckpointManager, compute_sha256, verify_parent_checkpoint, load_checkpoint
 from backbone.MobileFaceNets import MobileFaceNet
 
 
@@ -171,7 +168,7 @@ def test_full_pipeline_workflow():
             load_checkpoint(corrupt_file)
 
         # 11. Test dataset CSV parsing with quoted names and commas
-        from dataset import VGGFace2ArchiveInspector
+        from modules.dataset import VGGFace2ArchiveInspector
         meta_dir = os.path.join(temp_dir, "meta")
         os.makedirs(meta_dir, exist_ok=True)
         csv_file = os.path.join(meta_dir, "identity_meta.csv")
@@ -187,7 +184,7 @@ def test_full_pipeline_workflow():
         assert parsed_train[0]["name"] == "Fine, Frenzy"
 
         # 12. Test evaluator Feature Norm Diagnostics (and alias)
-        from evaluator import FeatureEvaluator
+        from modules.evaluator import FeatureEvaluator
         norms_test = norm_exp.cpu().numpy()
         diag = FeatureEvaluator.compute_feature_norm_diagnostics(norms_test)
         assert "mean_norm" in diag and diag["mean_norm"] > 0
@@ -196,7 +193,7 @@ def test_full_pipeline_workflow():
         assert fiqa_alias["mean_norm"] == diag["mean_norm"]
 
         # 13. Test missing image exception (fail-closed, no zero vector fallback)
-        from dataset import FaceImageDataset, validate_dataset_files
+        from modules.dataset import FaceImageDataset, validate_dataset_files
         fake_index = os.path.join(temp_dir, "fake_index.txt")
         with open(fake_index, "w") as f:
             f.write("non_existent_img.jpg 0\n")
@@ -221,11 +218,9 @@ def test_full_pipeline_workflow():
             verify_parent_checkpoint(export_pt, expected_hash=None, require_hash=True)
 
         # 17. Test module-level import of Trainer without relative import errors
-        import sys
-        if MODULES_DIR in sys.path:
-            from modules.trainer import Trainer, set_seed
-            assert callable(Trainer)
-            assert callable(set_seed)
+        from modules.trainer import Trainer, set_seed
+        assert callable(Trainer)
+        assert callable(set_seed)
 
         # 18. Verify parse_identity_meta on actual VGGFace2 meta file if present
         actual_meta_csv = "F:/FaceX-Zoo/VGGFace2/meta/identity_meta.csv"

@@ -1,6 +1,8 @@
 # VGGFace2 Parent부터 4개 헤드의 Origin 평가까지
 
-같은 `RUN_ID`로 네 노트북을 순서대로 사용한다. 첫 코드 셀에서 데이터와 모델 루트를 확인한 뒤 해당 단계의 `EXECUTE=True`를 지정한다. 새 실행은 새 `RUN_ID`를 사용한다. 결과는 모델 루트의 `facex/clean_ucface/RUN_ID`에 저장한다.
+네 노트북은 기본 `RUN_ID="clean_mfn1024_s8972_v3"`를 공유한다. 첫 설정 셀의 `EXECUTE`, `RESUME`, `KEEP_RAW_RESULTS`는 모두 False다. 정식 실행 시 데이터와 모델 루트를 확인하고 해당 단계에서 `EXECUTE=True`로 바꾼다. 결과는 모델 루트의 `facex/clean_ucface/RUN_ID`에 저장한다. v2 중단 기록은 별도 보존한다.
+
+새 Parent 학습 전에 TinyFace를 빠르게 대조하려면 02에서 `PARENT_SOURCE="legacy_parent_wd0"`, `PROBE_DATASETS=["tinyface"]`, `EXECUTE=True`로 실행한다. 해시가 고정된 기존 Parent를 사용해 CosFace 40 epoch를 학습하고 distractor 제외 Rank-1을 기록한다. 이후 01을 실행하고 02에서 `PARENT_SOURCE="clean_parent"`로 같은 조건을 평가하면 두 결과가 한 표에 표시된다.
 
 | 순서 | 실행과 결과 |
 | --- | --- |
@@ -13,7 +15,7 @@
 
 | 대상 | 학습 입력 | 학습 설정 |
 | --- | --- | --- |
-| VGGFace2 | 공식 학습 8,631명·3,141,890장, 5점 정렬 112×112 | MobileFaceNet 1024D, ArcFace m=0.5·s=64 및 단조 fallback, SGD momentum 0.9, batch 256, 24 epoch. 첫 epoch LR 0.01→0.1, 10·18·22 종료 후 ×0.1. Dropout 0, 좌우반전 0.5, Conv·Linear 가중치 WD 1e-4. |
+| VGGFace2 | 공식 학습 8,631명·3,141,890장, 5점 정렬 112×112 | MobileFaceNet 1024D, ArcFace m=0.5·s=64 및 단조 fallback, SGD momentum 0.9, batch 128, 24 epoch. PNG 로더는 `num_workers=6`, `prefetch_factor=4`다. 첫 두 epoch 전체 step에서 LR 0.0025→0.025 선형 warmup, 10·18·22 종료 후 ×0.1. 전체 gradient L2 norm clip 5.0. Dropout 0, 좌우반전 0.5. Conv2d·Linear·BN2d·PReLU weight에 `backbone_decay=1e-4`, 출력 BN1d·head·모든 bias에 `other_decay=0.0`. |
 | TinyFace | 2,570명·7,804장, PFLD 5점 | 공통 fine-tune 설정 |
 | SCFace | 50명·800장, 제공 좌표 두 눈 정렬 | 공통 fine-tune 설정 |
 | SurvFace `paper_table1` | 공식 학습 5,319명·220,888장, 112×112 bicubic stretch | `origin_only=True`. Table I 비교 범위. 보정용 fit·safety 신원이 학습에 포함된다. |
@@ -33,6 +35,16 @@ MagFace와 ArcFace의 안정화 설정은 로컬 레시피이며 `plan.json`과 
 같은 `RUN_ID`의 새 Parent에서 학습 설정·seed·입력·Parent 해시가 일치하면 TinyFace와 SCFace의 완료 모델을 두 범위에서 재사용한다. 02 TinyFace CosFace도 이 대상이다. 대상 범위에는 검증된 최종 체크포인트 사본과 완료 기록을 게시한다. `reused_from`은 원래 학습 범위·해시·보존 옵션을 기록하며 중간 체크포인트는 원래 범위에 남는다. 대상에 이미 미완료 기록이 있을 때는 그 기록을 보존하고 재사용 게시를 멈춘다.
 
 ## 지표 읽기
+
+Parent의 각 epoch 로그와 `parent/progress.json`에는 clip **전** 최대 전체 L2 gradient norm(`grad_norm_clipped_max`), PReLU 가중치의 최대 절댓값(`max_abs_prelu`), BN1d·BN2d의 최대 running variance(`max_bn_running_var`), 출력 Linear의 최대 행 L2 norm(`max_linear_row_norm`), 정규화한 클래스 방향 평균의 길이(`head_direction_norm`)가 남는다. 자동 health gate는 epoch 2부터 loss가 이전 최저 loss보다 3.0 초과 상승하거나, 어느 epoch든 PReLU 최댓값이 10.0 또는 BN variance 최댓값이 100,000을 초과하면 작동한다. 해당 epoch 체크포인트와 progress를 저장한 뒤 RuntimeError로 중단한다. `health_gate_failure`와 `last_failure.txt`에서 이유를 확인할 수 있다. 중단 epoch에서는 zero-shot 측정을 생략한다. 조건을 바꾼 실험에는 새 RUN_ID를 사용한다.
+
+VGGFace2 전체 목록을 batch 128로 읽으면 epoch당 24,547번 갱신하고 마지막 배치에는 2장이 들어간다. 이 2장도 배치 평균 loss로 SGD를 한 번 갱신한다. `grad_norm_clipped_max`가 5.0을 넘으면 그 epoch에 clipping을 적용한 배치가 있었다는 뜻이다. 최대치만 저장하므로 해당 배치 번호를 특정하려면 배치별 값이 필요하다.
+
+Fine-tune에서는 매 epoch 종료 시 loss가 유한한지, 클래스 방향 집중도(`head_direction_norm`)가 0.85를 초과하는지, 출력 BN weight L2가 1.0 미만인지 확인한다. 기본 설정에서 backbone을 푸는 시점은 epoch 4다. Epoch 5부터는 loss가 이전 모든 epoch의 최저 loss보다 5.0을 초과해 높아져도 중단한다. Gate에 걸리면 실패 epoch 체크포인트와 진단을 저장하고 직전 정상 체크포인트도 보존한다. 같은 실패 기록에서 `RESUME=True`로 실행하면 gate 사유와 함께 다시 중단한다.
+
+02와 03에서 `EXECUTE=False`로 마지막 셀을 실행하면 마지막 저장 epoch와 `health_gate_failure`를 확인할 수 있다. `health_gate_failed`는 해당 사유로 중단된 상태다. 02는 새 Parent와 Parent_WD0 양쪽의 학습 상태와 평가 완료 여부를 표시한다. 완료된 평가의 Rank-1 또는 TPIR은 바로 아래 비교표에 표시된다.
+
+LFW v3은 deepfunneled 250×250 원본의 중앙 144×144 ROI에서 PFLD로 5점을 추출하고 좌표를 원본으로 되돌린 뒤 원본 픽셀에서 ArcFace 112×112로 정렬한다. `plan.json`의 `monitor_inputs.lfw_alignment` 값은 `pfld_center144_five_point_arc112_v1`이다. 이전 전체 프레임 resize 점수와의 차이에는 전처리 효과도 포함된다.
 
 - Parent의 LFW는 공식 6,000쌍 10-fold이며 각 fold 임계값은 다른 9개 fold에서 계산한다. SCFace는 d1·d2·d3 각각 400개 probe, TinyFace 중간 점검은 distractor 제외 3,728개 probe다. Epoch 10 LFW 99.0%, 최종 99.4~99.6%는 Carbon의 기대 범위다. Parent 종합표에는 논문이 보고한 지점과 로컬 대조 값을 붙인다.
 - 최종 TinyFace는 같은 3,728개 probe에서 4,443개 정답 gallery 기준 Rank-1을 보고한다. distractor 포함 열은 153,428장까지 추가한다. SCFace는 거리별 및 전체 Rank-1을 건수와 함께 보고한다. 동점은 보수적으로 순위를 계산한다.

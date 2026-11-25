@@ -33,6 +33,7 @@ DATA = {
     ),
 }
 MILESTONES = (2, 5, 10, 18, 24)
+LFW_ALIGNMENT = "pfld_center144_five_point_arc112_v1"
 
 
 def checked(path, expected):
@@ -81,6 +82,16 @@ def lfw_pairs(root):
     return list(images), np.asarray(pairs)
 
 
+@torch.inference_mode()
+def lfw_landmarks(model, images):
+    if any(img.shape != (250, 250, 3) for img in images):
+        raise ValueError("LFW deepfunneled alignment requires 250x250 BGR images")
+    patches = [cv2.resize(img[53:197, 53:197], (112, 112)) for img in images]
+    batch = torch.from_numpy(np.stack(patches)).to(next(model.parameters()).device)
+    points = model(batch.permute(0, 3, 1, 2).float().div_(255))[1].reshape(len(images), 106, 2)
+    return points[:, [104, 105, 54, 84, 90]].cpu().numpy() * 144.0 + 53.0
+
+
 def prepare_panels(root):
     """Prepare raw pixels once per process. No recognition model or old export is read."""
     start = time.perf_counter()
@@ -119,16 +130,17 @@ def prepare_panels(root):
                     landmarks = [eyes[p.stem] for p in chunk]
                 elif ds == "tinyface":
                     landmarks = tiny_landmarks(landmark_model, imgs)
+                else:
+                    landmarks = lfw_landmarks(landmark_model, imgs)
                 for j, (img, sha) in enumerate(decoded):
                     digest.update(bytes.fromhex(sha))
-                    pixels[offset + j] = (
-                        cv2.resize(img, (112, 112), interpolation=cv2.INTER_CUBIC)
-                        if ds == "lfw"
-                        else cv2.warpAffine(img, similarity(landmarks[j]), (112, 112), flags=cv2.INTER_CUBIC)
+                    pixels[offset + j] = cv2.warpAffine(
+                        img, similarity(landmarks[j]), (112, 112), flags=cv2.INTER_CUBIC
                     )
         panels[ds] = (pixels, labels)
     return panels, dict(
         raw_images_sha256=digest.hexdigest(),
+        lfw_alignment=LFW_ALIGNMENT,
         prepare_seconds=time.perf_counter() - start,
         unique_images={ds: len(item[0]) for ds, item in panels.items()},
     )

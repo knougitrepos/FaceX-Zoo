@@ -11,7 +11,7 @@ import torch
 from .alignment_resume import recovery_lock
 from .backbone_factory import build_backbone
 from .checkpoint_manager import CheckpointManager, compute_sha256, load_checkpoint
-from .clean_benchmarks import checked, evaluate_aligned, evaluate_survface, monitor, prepare_panels
+from .clean_benchmarks import LFW_ALIGNMENT, checked, evaluate_aligned, evaluate_survface, monitor, prepare_panels
 from .clean_protocols import (
     DATASETS,
     HEADS,
@@ -71,7 +71,12 @@ def _record(folder, plan, calculate):
         plan_path = folder / "plan.json"
         if (folder / "COMPLETED").exists():
             result = read_result(folder)
-            if json.loads(plan_path.read_bytes()) != plan:
+            saved_plan = json.loads(plan_path.read_bytes())
+            # Downstream metrics are unchanged by the v3 Parent and LFW corrections.
+            if "head" in plan and compatible_completed_implementation(saved_plan["implementation"]):
+                if saved_plan["implementation"]["clean_protocols"] == plan["implementation"]["clean_protocols"]:
+                    saved_plan["implementation"] = plan["implementation"]
+            if saved_plan != plan:
                 raise ValueError(f"Completed evaluation differs from requested plan: {folder}")
             return result
         write_json(plan_path, plan, immutable=True)
@@ -129,6 +134,11 @@ def parent_validation(root, run, *, seed=8972, keep_raw_results=False):
     _, current = final_artifact(run / "parent")
     stored_panel = current["epochs"][-1]["zero_shot"]["metrics"]
     folder = run / "parent_validation"
+    parent_inputs = json.loads((run / "parent/plan.json").read_bytes())["monitor_inputs"]
+    if parent_inputs.get("lfw_alignment") != LFW_ALIGNMENT and folder.exists():
+        # Keep historical validation records readable at their original path.
+        if (folder / "plan.json").is_file() and not json.loads((folder / "plan.json").read_bytes()).get("lfw_alignment"):
+            folder = run / ("parent_validation_" + LFW_ALIGNMENT)
     from .clean_protocols import LEGACY_SHA
 
     plan = dict(
@@ -138,6 +148,7 @@ def parent_validation(root, run, *, seed=8972, keep_raw_results=False):
         keep_raw_results=keep_raw_results,
         seed=seed,
         implementation=files_for_protocol(),
+        lfw_alignment=LFW_ALIGNMENT,
     )
 
     def calculate():
@@ -145,13 +156,11 @@ def parent_validation(root, run, *, seed=8972, keep_raw_results=False):
         legacy = _model(payload["backbone_state_dict"])
         del payload
         panels, info = prepare_panels(root)
-        parent_plan = json.loads((run / "parent/plan.json").read_bytes())
-        if info["raw_images_sha256"] != parent_plan["monitor_inputs"]["raw_images_sha256"]:
+        if info["raw_images_sha256"] != parent_inputs["raw_images_sha256"]:
             raise ValueError("Parent monitoring pixels differ from the legacy comparison inputs")
         legacy_panel = monitor(
             legacy, panels, raw_file=folder / "legacy_panels.npz" if keep_raw_results else None
         )["metrics"]
-        del panels
         legacy_roc = evaluate_survface(
             legacy, root, folder / "legacy_survface.npz" if keep_raw_results else None
         )
@@ -159,6 +168,11 @@ def parent_validation(root, run, *, seed=8972, keep_raw_results=False):
         payload, clean_sha = load_parent(run, "clean_parent", seed)
         model = _model(payload["backbone_state_dict"])
         del payload
+        clean_panel = stored_panel
+        if parent_inputs.get("lfw_alignment") != info["lfw_alignment"]:
+            # An earlier Parent used unaligned LFW inputs. Evaluate both weights on the same pixels.
+            clean_panel = monitor(model, panels, raw_file=folder / "clean_panels.npz" if keep_raw_results else None)["metrics"]
+        del panels
         clean_roc = evaluate_survface(
             model, root, folder / "clean_survface.npz" if keep_raw_results else None
         )
@@ -175,11 +189,11 @@ def parent_validation(root, run, *, seed=8972, keep_raw_results=False):
                     )
                 )
             elif ds == "scface":
-                clean, old = (_percentages(ds, panel[ds]) for panel in (stored_panel, legacy_panel))
+                clean, old = (_percentages(ds, panel[ds]) for panel in (clean_panel, legacy_panel))
             else:
                 clean, old = (
                     _percentages(ds, {"without_distractors": panel[ds]})
-                    for panel in (stored_panel, legacy_panel)
+                    for panel in (clean_panel, legacy_panel)
                 )
             table.extend(
                 {
@@ -193,7 +207,7 @@ def parent_validation(root, run, *, seed=8972, keep_raw_results=False):
             dict(
                 dataset="lfw",
                 metric="accuracy",
-                observed_pct=100 * stored_panel["lfw"]["accuracy"],
+                observed_pct=100 * clean_panel["lfw"]["accuracy"],
                 legacy_pct=100 * legacy_panel["lfw"]["accuracy"],
             )
         )
@@ -203,7 +217,7 @@ def parent_validation(root, run, *, seed=8972, keep_raw_results=False):
             comparison=table,
             clean_roc=clean_roc,
             legacy_roc=legacy_roc,
-            clean_panel=stored_panel,
+            clean_panel=clean_panel,
             legacy_panel=legacy_panel,
         )
 

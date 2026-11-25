@@ -16,6 +16,61 @@ from modules.clean_protocols import DATASETS, HEADS, LEGACY_PARENT, LEGACY_SHA, 
 from modules.checkpoint_manager import load_checkpoint
 
 
+@pytest.mark.parametrize("key,value", [
+    ("loss", 7.001), ("max_abs_prelu", 10.001), ("max_bn_running_var", 100001),
+])
+def test_parent_health_gate_reports_each_failure(key, value):
+    history = [{"loss": 4.0}, {"loss": 6.0}]
+    row = dict(epoch=3, loss=7.0, max_abs_prelu=10.0, max_bn_running_var=100000.0)
+    assert not training.parent_health_issue(row, history)
+    row[key] = value
+    row["health_gate_failure"] = training.parent_health_issue(row, history)
+    with pytest.raises(RuntimeError, match=f"Parent health gate stopped epoch 3: {key}"):
+        training.enforce_health("parent", row)
+
+
+def test_parent_optimizer_decay_partition():
+    from modules.model_builder import build_model
+
+    r = training.recipe("parent")
+    model = build_model(dict(type="MobileFaceNet", feat_dim=1024, dropout_rate=0.0),
+                        dict(type="ArcFace", num_class=5, margin_arc=0.5, margin_am=0.24, scale=64))
+    model.backbone.bn.bias.requires_grad_(False)
+    groups = training.optimizer_for(model, "parent", r).param_groups
+    assert r["batch"] == 128 and [group["lr"] for group in groups] == [0.025, 0.025]
+    params = [p for group in groups for p in group["params"]]
+    assert len(params) == len({id(p) for p in params}) == len(list(model.parameters()))
+    decay = {id(p): group["weight_decay"] for group in groups for p in group["params"]}
+    for name, mod in model.named_modules():
+        for key, p in mod.named_parameters(recurse=False):
+            regularized = name.startswith("backbone.") and key == "weight" and isinstance(
+                mod, (torch.nn.Conv2d, torch.nn.Linear, torch.nn.BatchNorm2d, torch.nn.PReLU)
+            )
+            assert decay[id(p)] == (1e-4 if regularized else 0.0), (name, key)
+
+
+def test_lfw_pfld_uses_center_roi_and_original_coordinates():
+    import numpy as np
+    from modules.clean_benchmarks import lfw_landmarks
+
+    class Landmarks(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.anchor = torch.nn.Parameter(torch.empty(0))
+
+        def forward(self, x):
+            assert x.shape == (1, 3, 112, 112) and x.dtype == torch.float32
+            assert torch.allclose(x, torch.full_like(x, 96 / 255))
+            return None, torch.arange(212).float().reshape(1, 106, 2) / 212
+
+    img = np.zeros((250, 250, 3), dtype=np.uint8)
+    img[53:197, 53:197] = 96
+    expected = np.arange(212).reshape(106, 2)[[104, 105, 54, 84, 90]] / 212 * 144 + 53
+    np.testing.assert_allclose(lfw_landmarks(Landmarks(), [img])[0], expected, rtol=1e-6)
+    with pytest.raises(ValueError, match="250x250"):
+        lfw_landmarks(Landmarks(), [img[:249]])
+
+
 def test_expansion_needs_human_approval_and_frozen_probe(tmp_path):
     with pytest.raises(ValueError, match="APPROVE_EXPANSION"):
         campaign.run_full(
@@ -261,6 +316,8 @@ def test_real_inputs_four_heads_three_datasets_resume_and_parent_sources(tmp_pat
     monkeypatch.setattr(training, "prepare_panels", lambda root: ({}, {}))
     monkeypatch.setattr(training, "input_list", lambda root, r: tmp_path / "parent_input/train_list.txt")
     parent = training.run_stage(data, run, "parent")
+    loader_plan = json.loads((run / "parent/plan.json").read_bytes())
+    assert (loader_plan["num_workers"], loader_plan["prefetch_factor"]) == (6, 4)
     clean, clean_sha = training.load_parent(run, "clean_parent", 8972)
     assert clean_sha == parent["sha256"] and clean_sha != old_sha
     del clean
@@ -291,6 +348,8 @@ def test_real_inputs_four_heads_three_datasets_resume_and_parent_sources(tmp_pat
         assert not (folder / "COMPLETED").exists()
         saved = json.loads((folder / "progress.json").read_bytes())
         assert saved["epoch"] == 3
+        loader_plan = json.loads((folder / "plan.json").read_bytes())
+        assert (loader_plan["num_workers"], loader_plan["prefetch_factor"]) == (4, 4)
         monkeypatch.setattr(training, "train_epoch", train_epoch)
         report = training.run_stage(data, run, "finetune", resume=True, **options)
         assert report["epochs"][:3] == saved["epochs"]
