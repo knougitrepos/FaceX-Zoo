@@ -15,7 +15,7 @@
 
 | 대상 | 학습 입력 | 학습 설정 |
 | --- | --- | --- |
-| VGGFace2 | 공식 학습 8,631명·3,141,890장, 5점 정렬 112×112 | MobileFaceNet 1024D, ArcFace m=0.5·s=64 및 단조 fallback, SGD momentum 0.9, batch 128, 24 epoch. PNG 로더는 `num_workers=6`, `prefetch_factor=4`다. 첫 두 epoch 전체 step에서 LR 0.0025→0.025 선형 warmup, 10·18·22 종료 후 ×0.1. 전체 gradient L2 norm clip 5.0. Dropout 0, 좌우반전 0.5. Conv2d·Linear·BN2d·PReLU weight에 `backbone_decay=1e-4`, 출력 BN1d·head·모든 bias에 `other_decay=0.0`. |
+| VGGFace2 | 공식 학습 8,631명·3,141,890장, 5점 정렬 112×112 | MobileFaceNet 1024D, ArcFace m=0.5·s=64 및 단조 fallback, SGD momentum 0.9, batch 128, 24 epoch. PNG 로더는 `num_workers=6`, `prefetch_factor=4`, `drop_last=True`다. 첫 두 epoch 전체 step에서 LR 0.0025→0.025 선형 warmup, 10·18·22 종료 후 ×0.1. 전체 gradient L2 norm clip 5.0. Dropout 0, 좌우반전 0.5. Conv2d·Linear·BN2d·PReLU weight에 `backbone_decay=1e-4`, 출력 BN1d·head·모든 bias에 `other_decay=0.0`. |
 | TinyFace | 2,570명·7,804장, PFLD 5점 | 공통 fine-tune 설정 |
 | SCFace | 50명·800장, 제공 좌표 두 눈 정렬 | 공통 fine-tune 설정 |
 | SurvFace `paper_table1` | 공식 학습 5,319명·220,888장, 112×112 bicubic stretch | `origin_only=True`. Table I 비교 범위. 보정용 fit·safety 신원이 학습에 포함된다. |
@@ -38,7 +38,9 @@ MagFace와 ArcFace의 안정화 설정은 로컬 레시피이며 `plan.json`과 
 
 Parent의 각 epoch 로그와 `parent/progress.json`에는 clip **전** 최대 전체 L2 gradient norm(`grad_norm_clipped_max`), PReLU 가중치의 최대 절댓값(`max_abs_prelu`), BN1d·BN2d의 최대 running variance(`max_bn_running_var`), 출력 Linear의 최대 행 L2 norm(`max_linear_row_norm`), 정규화한 클래스 방향 평균의 길이(`head_direction_norm`)가 남는다. 자동 health gate는 epoch 2부터 loss가 이전 최저 loss보다 3.0 초과 상승하거나, 어느 epoch든 PReLU 최댓값이 10.0 또는 BN variance 최댓값이 100,000을 초과하면 작동한다. 해당 epoch 체크포인트와 progress를 저장한 뒤 RuntimeError로 중단한다. `health_gate_failure`와 `last_failure.txt`에서 이유를 확인할 수 있다. 중단 epoch에서는 zero-shot 측정을 생략한다. 조건을 바꾼 실험에는 새 RUN_ID를 사용한다.
 
-VGGFace2 전체 목록을 batch 128로 읽으면 epoch당 24,547번 갱신하고 마지막 배치에는 2장이 들어간다. 이 2장도 배치 평균 loss로 SGD를 한 번 갱신한다. `grad_norm_clipped_max`가 5.0을 넘으면 그 epoch에 clipping을 적용한 배치가 있었다는 뜻이다. 최대치만 저장하므로 해당 배치 번호를 특정하려면 배치별 값이 필요하다.
+Parent는 매 epoch에 `seed + epoch`로 VGGFace2 전체 목록을 다시 섞고, 그 순서에서 마지막 2장을 제외한다. BatchNorm과 SGD 갱신에는 epoch당 24,546개 배치 × 128장 = 3,141,888장이 들어간다. `plan.json`의 `recipe.images`는 입력 목록 전체 크기(3,141,890장)이고, `recipe.drop_last`는 학습 시 마지막 미완성 배치를 제외하는 설정이다.
+
+`grad_norm_clipped_max`가 5.0을 넘으면 그 epoch에 clipping을 적용한 배치가 있었다는 뜻이다. 최대치만 저장하므로 해당 배치 번호를 특정하려면 배치별 값이 필요하다.
 
 Fine-tune에서는 매 epoch 종료 시 loss가 유한한지, 클래스 방향 집중도(`head_direction_norm`)가 0.85를 초과하는지, 출력 BN weight L2가 1.0 미만인지 확인한다. 기본 설정에서 backbone을 푸는 시점은 epoch 4다. Epoch 5부터는 loss가 이전 모든 epoch의 최저 loss보다 5.0을 초과해 높아져도 중단한다. Gate에 걸리면 실패 epoch 체크포인트와 진단을 저장하고 직전 정상 체크포인트도 보존한다. 같은 실패 기록에서 `RESUME=True`로 실행하면 gate 사유와 함께 다시 중단한다.
 

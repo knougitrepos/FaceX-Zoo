@@ -43,6 +43,7 @@ from .trainer import set_seed
 
 
 # Historical complete implementations. Only complete, verified results may use these.
+_BATCH128_KEEP_LAST_TRAINING = "12bfc6cf11463ca3572d4d72c886ac36b003ef0fdf3b31313ba07e889d1779ee"
 _BATCH256_V3_TRAINING = (
     "91e2c6d752710cb35946e38a264167b4f574f83d0f5e78c8f4d639a07c9eb38e",
     "402cc58c5d7b9f943749f866da7bdebcf3f975ee11f6c6167dd8a70833e00bce",
@@ -86,6 +87,7 @@ def recipe(stage):
             images=3141890,
             classes=8631,
             batch=128,
+            drop_last=True,
             epochs=24,
             dropout=0.0,
             optimizer="SGD",
@@ -261,7 +263,10 @@ def train_epoch(model, opt, stage, r, loader, epoch, *, diagnostics=None):
         count += len(ys)
         if (i + 1) % 500 == 0:
             print(f"{stage} ep {epoch} batch {i + 1}/{len(loader)}, loss {total / count:.4f}", flush=True)
-    if count != len(loader.dataset):
+    expected_count = len(loader.dataset)
+    if r.get("drop_last", False):
+        expected_count -= expected_count % r["batch"]
+    if not count or count != expected_count:
         raise ValueError("Incomplete training epoch")
     if diagnostics is not None and peak_grad_norm is not None:
         diagnostics["grad_norm_clipped_max"] = peak_grad_norm
@@ -331,7 +336,7 @@ def files_for_protocol():
 
 def compatible_completed_implementation(recorded):
     current = files_for_protocol()
-    versions = [_PRE_PARENT_V3, _PRE_SCOPE_REUSE]
+    versions = [_PRE_PARENT_V3, _PRE_SCOPE_REUSE, {"clean_training": _BATCH128_KEEP_LAST_TRAINING}]
     versions.extend({"clean_training": digest} for digest in _BATCH256_V3_TRAINING)
     return recorded == current or any(recorded == {**current, **version} for version in versions)
 
@@ -355,10 +360,14 @@ def final_artifact(stage_dir, *, expected_recipe=None):
         # Match the complete historical contract without permitting resume with changed settings.
         recorded = contract["implementation"]
         if compatible_completed_implementation(recorded):
-            if recorded["clean_training"] in _BATCH256_V3_TRAINING:
-                r = dict(r, batch=256, lr=0.05, warmup_start=0.005)
-            elif recorded["clean_training"] in (_PRE_PARENT_V3["clean_training"], _PRE_SCOPE_REUSE["clean_training"]):
-                r = {k: v for k, v in r.items() if k not in ("max_grad_norm", "warmup_epochs", "backbone_decay")}
+            training = recorded["clean_training"]
+            keep_last = {k: v for k, v in r.items() if k != "drop_last"}
+            if training == _BATCH128_KEEP_LAST_TRAINING:
+                r = keep_last
+            elif training in _BATCH256_V3_TRAINING:
+                r = dict(keep_last, batch=256, lr=0.05, warmup_start=0.005)
+            elif training in (_PRE_PARENT_V3["clean_training"], _PRE_SCOPE_REUSE["clean_training"]):
+                r = {k: v for k, v in keep_last.items() if k not in ("max_grad_norm", "warmup_epochs", "backbone_decay")}
                 r.update(batch=256, lr=0.1, warmup_start=0.01, conv_linear_decay=0.0001)
     if (
         (expected_recipe is None and contract["stage"] != folder.name)
@@ -541,6 +550,7 @@ def run_stage(
             str(train_list.parent),
             str(train_list),
             batch_size=r["batch"],
+            drop_last=r.get("drop_last", False),
             num_workers=6 if stage == "parent" else 4,
             cache_dir=str(run.parent / "input_index"),
             seed=seed,

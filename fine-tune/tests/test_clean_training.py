@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from modules import clean_benchmarks as b
 from modules import clean_training as t
+from modules.input_pipeline import EpochBatchSampler
 
 
 def test_parent_checkpoint_records_arcface_margin_and_scale():
@@ -47,19 +48,51 @@ def test_nonfinite_batch_never_steps_optimizer(monkeypatch, clip_limit, invalid)
         t.train_epoch(model, opt, "parent", r, batches, 3)
 
 
-@pytest.mark.parametrize("version,one_epoch_warmup", [
-    (t._PRE_PARENT_V3, True),
-    ({"clean_training": "402cc58c5d7b9f943749f866da7bdebcf3f975ee11f6c6167dd8a70833e00bce"}, False),
+@pytest.mark.parametrize("drop_last,expected_sizes", [(True, [4, 4]), (False, [4, 4, 2])])
+def test_train_epoch_checks_sample_count_with_tail_batch_policy(monkeypatch, drop_last, expected_sizes):
+    class Samples(torch.utils.data.TensorDataset):
+        def __getitem__(self, key):
+            index, _ = key
+            return super().__getitem__(index)
+
+    class Classifier(torch.nn.Linear):
+        def forward(self, xs, ys):
+            batch_sizes.append(len(ys))
+            return super().forward(xs), None
+
+    # Exercise the real sample loop and sampler without requiring a GPU.
+    monkeypatch.setattr(torch.Tensor, "cuda", lambda tensor, **_: tensor)
+    batch_sizes = []
+    dataset = Samples(torch.eye(10), torch.arange(10) % 2)
+    sampler = EpochBatchSampler(len(dataset), batch_size=4, seed=8972, drop_last=drop_last)
+    loader = torch.utils.data.DataLoader(dataset, batch_sampler=sampler)
+    r = dict(t.recipe("parent"), batch=4)
+    if not drop_last:
+        del r["drop_last"]
+    model = Classifier(10, 2)
+    opt = torch.optim.SGD([{"params": [model.weight]}, {"params": [model.bias]}], lr=r["lr"])
+
+    loss = t.train_epoch(model, opt, "parent", r, loader, 1)
+
+    assert math.isfinite(loss)
+    assert batch_sizes == expected_sizes
+
+
+@pytest.mark.parametrize("version,batch,lr", [
+    (t._PRE_PARENT_V3, 256, 0.1),
+    ({"clean_training": "402cc58c5d7b9f943749f866da7bdebcf3f975ee11f6c6167dd8a70833e00bce"}, 256, 0.05),
+    ({"clean_training": "12bfc6cf11463ca3572d4d72c886ac36b003ef0fdf3b31313ba07e889d1779ee"}, 128, 0.025),
 ])
-def test_completed_batch256_parent_requires_matching_recipe_and_implementation(tmp_path, version, one_epoch_warmup):
+def test_completed_historical_parent_requires_matching_recipe_and_implementation(tmp_path, version, batch, lr):
     from modules.checkpoint_manager import compute_sha256
 
     folder = tmp_path / "parent"
     folder.mkdir()
     checkpoint = folder / "epoch_24_0123456789ab.pt"
     checkpoint.write_bytes(b"test checkpoint")
-    r = dict(t.recipe("parent"), batch=256, lr=0.05, warmup_start=0.005)
-    if one_epoch_warmup:
+    r = dict(t.recipe("parent"), batch=batch, lr=lr, warmup_start=lr / 10)
+    del r["drop_last"]
+    if lr == 0.1:
         for key in ("warmup_epochs", "backbone_decay", "max_grad_norm"):
             del r[key]
         r.update(lr=0.1, warmup_start=0.01, conv_linear_decay=0.0001)
@@ -79,11 +112,11 @@ def test_completed_batch256_parent_requires_matching_recipe_and_implementation(t
 
     publish()
     assert t.final_artifact(folder)[0] == checkpoint
-    r["batch"] = 128
+    r["batch"] = batch // 2
     publish()
     with pytest.raises(ValueError, match="Incomplete clean training stage"):
         t.final_artifact(folder)
-    r["batch"] = 256
+    r["batch"] = batch
     implementation["clean_protocols"] = "0" * 64
     publish()
     with pytest.raises(ValueError, match="Incomplete clean training stage"):
@@ -158,11 +191,13 @@ def test_finetune_health_failure_preserves_checkpoints_and_blocks_resume(tmp_pat
 def test_recipe_phase_boundaries_and_origin_budget():
     parent, ft = t.recipe("parent"), t.recipe("finetune")
     assert (parent["batch"], parent["epochs"], parent["milestones"]) == (128, 24, [10, 18, 22])
-    assert parent["images"] % parent["batch"] == 2
+    assert parent["drop_last"] is True
+    assert divmod(parent["images"], parent["batch"]) == (24546, 2)
     assert (parent["warmup_start"], parent["lr"], parent["warmup_epochs"]) == (0.0025, 0.025, 2)
     assert parent["max_grad_norm"] == 5.0
     assert parent["augmentation"]["affine_probability"] == 0
     assert (ft["classes"], ft["batch"], ft["warmup_epochs"], ft["epochs"]) == (5319, 64, 3, 40)
+    assert "drop_last" not in ft
     assert b.MILESTONES == (2, 5, 10, 18, 24)
     unknown = [0.8, 0.8] + [0.3] * 8
     mask = np.array([True, True, True] + [False] * 10)
@@ -207,7 +242,7 @@ def test_clean_stage_recovery_and_handoff(tmp_path, monkeypatch):
 
     def short_recipe(stage):
         return dict(
-            original_recipe(stage), epochs=2 if stage == "parent" else 4, classes=2, images=8, batch=4
+            original_recipe(stage), epochs=2 if stage == "parent" else 4, classes=2, images=10, batch=4
         )
 
     monkeypatch.setattr(t, "recipe", short_recipe)
@@ -221,7 +256,7 @@ def test_clean_stage_recovery_and_handoff(tmp_path, monkeypatch):
     rng = np.random.default_rng(567)
     file = data / "train.txt"
     with file.open("w", encoding="utf-8") as out:
-        for i in range(8):
+        for i in range(10):
             p = data / f"{i}.png"
             assert cv2.imwrite(str(p), rng.integers(0, 256, (112, 112, 3), dtype=np.uint8))
             out.write(f"{p} {i % 2}\n")
@@ -249,6 +284,7 @@ def test_clean_stage_recovery_and_handoff(tmp_path, monkeypatch):
     assert parent["epochs"][1]["ending_lrs"] == pytest.approx([0.025, 0.025])
     plan = json.loads((run / "parent/plan.json").read_bytes())
     assert plan["num_workers"] == 0 and plan["prefetch_factor"] is None
+    assert plan["recipe"]["drop_last"] is True and plan["recipe"]["images"] == 10
     for row in parent["epochs"]:
         assert row["grad_norm_clipped_max"] > 0 and row["max_linear_row_norm"] > 0
         assert 0 <= row["head_direction_norm"] <= 1
